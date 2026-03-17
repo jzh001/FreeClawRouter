@@ -46,6 +46,9 @@ _proxy: ForwardingProxy | None = None
 # Valid values for local_only_threshold
 _VALID_THRESHOLDS = frozenset({"disabled", "simple", "moderate", "always"})
 
+# Valid values for router_mode
+_VALID_ROUTER_MODES = frozenset({"local", "python", "api"})
+
 # Available local model choices (shown in the dashboard Settings tab).
 # "none" disables local fallback entirely.
 _LOCAL_MODELS = [
@@ -118,6 +121,11 @@ async def lifespan(app: FastAPI):
     if saved_threshold and saved_threshold in _VALID_THRESHOLDS:
         _config.proxy.local_only_threshold = saved_threshold
         logger.info("Applied persisted local_only_threshold: %s", saved_threshold)
+
+    saved_router_mode = persisted.get("router_mode")
+    if saved_router_mode and saved_router_mode in _VALID_ROUTER_MODES:
+        _config.proxy.router_mode = saved_router_mode
+        logger.info("Applied persisted router_mode: %s", saved_router_mode)
 
     saved_model = persisted.get("local_fallback_model")
     if saved_model and saved_model in _LOCAL_MODELS:
@@ -264,9 +272,11 @@ async def _consume_stream(gen) -> AsyncGenerator[bytes, None]:
 
 @app.get("/api/settings")
 async def get_settings() -> JSONResponse:
-    threshold = _config.proxy.local_only_threshold if _config else "simple"
+    if _config is None:
+        return JSONResponse({"local_only_threshold": "disabled", "router_mode": "local"})
     return JSONResponse({
-        "local_only_threshold": threshold,
+        "local_only_threshold": _config.proxy.local_only_threshold,
+        "router_mode": _config.proxy.router_mode,
     })
 
 
@@ -294,14 +304,71 @@ async def post_settings(request: Request) -> JSONResponse:
             )
         _config.proxy.local_only_threshold = new_threshold
 
-    # Persist to JSON file so the setting survives a restart
+    new_router_mode = body.get("router_mode")
+    if new_router_mode is not None:
+        if new_router_mode not in _VALID_ROUTER_MODES:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"invalid router_mode: {new_router_mode!r}. "
+                         f"Must be one of: {sorted(_VALID_ROUTER_MODES)}"},
+            )
+        _config.proxy.router_mode = new_router_mode
+
+    # Persist to JSON file so settings survive a restart
     settings = _read_settings()
     if new_threshold is not None:
         settings["local_only_threshold"] = new_threshold
+    if new_router_mode is not None:
+        settings["router_mode"] = new_router_mode
     _write_settings(settings)
 
-    logger.info("Settings updated: local_only_threshold=%s", _config.proxy.local_only_threshold)
-    return JSONResponse({"ok": True, "local_only_threshold": _config.proxy.local_only_threshold})
+    logger.info(
+        "Settings updated: local_only_threshold=%s router_mode=%s",
+        _config.proxy.local_only_threshold, _config.proxy.router_mode,
+    )
+    return JSONResponse({
+        "ok": True,
+        "local_only_threshold": _config.proxy.local_only_threshold,
+        "router_mode": _config.proxy.router_mode,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /api/clear-history  — delete usage history records
+# ---------------------------------------------------------------------------
+
+_CLEAR_PERIODS = {
+    "hour":  3600,
+    "day":   86400,
+    "month": 30 * 86400,
+    "all":   None,
+}
+
+
+@app.post("/api/clear-history")
+async def clear_history(request: Request) -> JSONResponse:
+    """
+    Delete usage history for a given period.
+    Body: {"period": "hour" | "day" | "month" | "all"}
+    Deletes records older than now - period (or all records for "all").
+    """
+    try:
+        body: dict[str, Any] = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    period = body.get("period")
+    if period not in _CLEAR_PERIODS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"invalid period: {period!r}. Must be one of: {list(_CLEAR_PERIODS)}"},
+        )
+
+    seconds = _CLEAR_PERIODS[period]
+    since_ts = None if seconds is None else int(time.time()) - seconds
+    deleted = _storage.delete_history(since_ts)
+    logger.info("Cleared history: period=%s, rows_deleted=%d", period, deleted)
+    return JSONResponse({"ok": True, "period": period, "rows_deleted": deleted})
 
 
 # ---------------------------------------------------------------------------

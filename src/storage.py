@@ -258,3 +258,20 @@ def get_daily_series(days: int = 7) -> list[dict]:
         }
         for row in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Delete — clear history
+# ---------------------------------------------------------------------------
+
+def delete_history(since_ts: int | None = None) -> int:
+    """
+    Delete request records older than since_ts (or all records if None).
+    Returns the number of rows deleted.
+    """
+    with _conn() as db:
+        if since_ts is None:
+            cur = db.execute("DELETE FROM requests")
+        else:
+            cur = db.execute("DELETE FROM requests WHERE ts < ?", (since_ts,))
+        return cur.rowcount

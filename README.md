@@ -41,11 +41,11 @@ exhausted.
 
 ```bash
 # Install from https://ollama.com, then pull the default router model:
-ollama pull gpt-oss:20b
+ollama pull phi4-mini
 ```
 
 You can choose a different local model from the dashboard **Settings** tab after
-startup (`gpt-oss:20b`, `qwen3.5:9b/4b/2b/0.8b`, or disable local fallback).
+startup (`phi4-mini`, `gpt-oss:20b`, `qwen3.5:9b/4b/2b/0.8b`, or disable local fallback).
 
 ### 2. Clone this repository
 
@@ -310,9 +310,11 @@ The dashboard auto-refreshes every 10 seconds and shows:
 | **Tokens today (bar)** | Token consumption by provider |
 | **Last 24 h (line)** | Hourly request volume per provider — see traffic patterns over time |
 | **Last 7 days (bar)** | Daily request volume stacked by provider |
-| **Test Models tab** | Send a one-shot test to every configured model in parallel; shows pass/fail, latency, and response snippet |
-| **Settings → Routing** | Choose when to use local Ollama vs cloud APIs (disabled/simple/moderate/always) — no restart needed |
-| **Settings → Local Model** | Ollama connection status indicator + dropdown to select which local model to use; supports `gpt-oss:20b`, `qwen3.5` variants, or "none" to disable |
+| **Test Models tab** | Cloud models: one-shot test in parallel (20 s each). Local model: separate button with 60 s timeout for cold-start loading |
+| **Settings → Router mode** | `local` (Ollama LLM, default) / `python` (deterministic scoring, fastest) / `api` (fast cloud model) — no restart needed |
+| **Settings → Local AI fallback** | When to route to local Ollama instead of cloud APIs (disabled / simple / moderate / always) |
+| **Settings → Local Model** | Ollama connection status indicator + dropdown to select which local model to use; supports `phi4-mini`, `gpt-oss:20b`, `qwen3.5` variants, or "none" to disable |
+| **Usage → Clear History** | Delete usage records by time period (past hour / day / month / all) |
 
 Usage data is stored in a persistent SQLite database (`data/freeclawrouter.db` inside
 the Docker volume `freeclawrouter_data`). It survives container restarts and keeps a
@@ -335,7 +337,9 @@ http://<host-ip>:8765/dashboard
 | `POST /api/settings` | Update runtime settings (persisted, no restart needed) |
 | `GET /api/local-model` | Read local model config and Ollama reachability status |
 | `POST /api/local-model` | Change local fallback model (persisted, no restart needed) |
-| `POST /api/test-models` | Test all configured models in parallel; returns pass/fail + latency |
+| `POST /api/test-models` | Test all configured cloud models in parallel; returns pass/fail + latency |
+| `POST /api/test-local` | Test the local Ollama model with a 60 s timeout (handles cold-start loading) |
+| `POST /api/clear-history` | Delete usage records by period (`{"period":"hour"\|"day"\|"month"\|"all"}`) |
 | `POST /v1/chat/completions` | Main proxy endpoint (OpenAI-compatible) |
 | `GET /v1/models` | List all configured models |
 | `GET /health` | Liveness probe |
@@ -378,5 +382,5 @@ This is a known OpenClaw bug with custom providers. Ensure your `openclaw.json`
 explicitly declares `"contextWindow": 131072` (or higher) in the model definition.
 
 **Ollama router model not found**
-Run `ollama pull gpt-oss:20b` on the host, or update `router_model` in
-`config.yaml` to a model you have installed (`ollama list`).
+Run `ollama pull phi4-mini` on the host (default), or select a different model
+in the dashboard Settings tab. Run `ollama list` to see installed models.

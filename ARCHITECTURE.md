@@ -21,7 +21,7 @@ it simply has its `baseUrl` pointed at `http://localhost:8765/v1`.
 │                              ▼                       ▼           │
 │                    ┌──────────────────┐   ┌──────────────────┐  │
 │                    │  Cloud Free APIs │   │  Ollama (local)  │  │
-│                    │  Cerebras/Groq/  │   │  gpt-oss:20b     │  │
+│                    │  Cerebras/Groq/  │   │  phi4-mini       │  │
 │                    │  Gemini/etc.     │   │  (router+fallback)│  │
 │                    └──────────────────┘   └──────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
@@ -91,9 +91,15 @@ Incoming request
         └──────────┘                               │
                                                    ▼
                                        ┌─────────────────────────┐
-                                       │  Ollama LLM Confirmation │
-                                       │  (structured prompt with │
-                                       │   rules + recommendation)│
+                                       │  Tier 2: router_mode     │
+                                       │                          │
+                                       │  "local" (default)       │
+                                       │    → Ollama LLM confirms │
+                                       │  "python"                │
+                                       │    → Python score only   │
+                                       │  "api"                   │
+                                       │    → Fast cloud model    │
+                                       │      confirms recommend. │
                                        └──────────┬──────────────┘
                                                   │
                                                   ▼
@@ -103,10 +109,10 @@ Incoming request
                                          └────────────────┘
 ```
 
-### Tier 2: Scheduling Score + LLM Confirmation
+### Tier 2: Scheduling Score + Configurable LLM Confirmation
 
 The Python scheduler pre-computes a deterministic 0–100 score for each
-candidate using four OS-scheduling-inspired heuristics:
+candidate using OS-scheduling-inspired heuristics:
 
 | Heuristic | Analogy | Weight |
 |---|---|---|
@@ -117,13 +123,16 @@ candidate using four OS-scheduling-inspired heuristics:
 | **Provider priority** | Quality tiebreaker | +5 pts |
 
 The highest-scoring candidate becomes the **Python recommendation**. The
-local Ollama model is then given a structured, rule-annotated prompt that:
-1. Explains the scheduling rules explicitly (the LLM must apply them, not
-   invent them — critical for small models like gpt-oss:20b)
-2. Shows all candidates with their scores, headrooms, and status badges
-3. States the recommendation and asks the LLM to confirm or override
+`router_mode` setting (configurable on the dashboard Settings tab without restart)
+controls what happens next:
 
-If the Ollama call fails or times out, the proxy falls back to the Python
+| Mode | Behaviour |
+|---|---|
+| `local` (default) | Local Ollama LLM confirms or overrides the recommendation. Falls back to Python on any error. |
+| `python` | Python recommendation is used directly — fastest path, no LLM call. Always available. |
+| `api` | A fast cloud model (highest-priority provider with a `fast`-tagged model) confirms the recommendation. Falls back to Python on error. |
+
+If the LLM call fails or times out, the proxy falls back to the Python
 recommendation transparently — no request is ever blocked.
 
 ### Scheduling Rules (encoded in the prompt)
@@ -146,9 +155,10 @@ message content, no authentication data. This satisfies PRD §4.1.
 
 ### Ollama Router Think Mode
 
-`gpt-oss:20b` is a reasoning model that uses string-based thinking levels
-(`"low"`, `"medium"`, `"high"`) rather than boolean `true`/`false`. The router
-call uses `"think": "low"` to minimise the reasoning trace so the visible
+`phi4-mini` is the default local router/fallback model. Some reasoning models
+(e.g. `gpt-oss:20b`) use string-based thinking levels (`"low"`, `"medium"`,
+`"high"`) rather than boolean `true`/`false`. When such a model is selected, the
+router call uses `"think": "low"` to minimise the reasoning trace so the visible
 response (the option number) is generated within the `num_predict` token budget.
 Other models that don't support this field ignore it silently.
 

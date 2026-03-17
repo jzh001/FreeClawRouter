@@ -240,6 +240,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   .btn-save{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:11px 28px;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer;transition:opacity .15s}
   .btn-save:hover{opacity:.85}
   .btn-save:disabled{opacity:.4;cursor:default}
+  .btn-danger{background:#c62828;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:13px;font-weight:600;font-family:inherit;cursor:pointer;transition:opacity .15s}
+  .btn-danger:hover{opacity:.85}
   .save-msg{margin-top:10px;font-size:13px;min-height:18px}
   .ok{color:var(--green)}
   .err{color:var(--red)}
@@ -301,6 +303,18 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <div class="chart-wide"><h2>Requests per Hour &mdash; Last 24 h</h2><canvas id="chart-hourly"></canvas></div>
   <div class="chart-wide"><h2>Requests per Day &mdash; Last 7 Days</h2><canvas id="chart-daily"></canvas></div>
+
+  <div class="settings-card" style="max-width:600px;margin:24px auto">
+    <h2 style="margin:0 0 8px">Clear History</h2>
+    <p style="color:var(--muted);margin:0 0 16px;font-size:13px">Permanently delete usage records from the database. The charts and today&rsquo;s totals will update immediately.</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn-danger" onclick="clearHistory('hour')">Clear Past Hour</button>
+      <button class="btn-danger" onclick="clearHistory('day')">Clear Past Day</button>
+      <button class="btn-danger" onclick="clearHistory('month')">Clear Past Month</button>
+      <button class="btn-danger" onclick="clearHistory('all')" style="background:#b71c1c">Clear All History</button>
+    </div>
+    <div id="clear-history-msg" style="margin-top:12px;font-size:13px"></div>
+  </div>
 </main>
 </div>
 
@@ -508,20 +522,28 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div id="tab-settings" style="display:none">
 <main>
   <div class="settings-card">
-    <h3>Local AI Routing</h3>
-    <p class="tagline">Choose when to use your local AI model instead of cloud APIs.</p>
+    <h3>Routing Settings</h3>
+    <p class="tagline">Control how FreeClawRouter decides which provider handles each request.</p>
 
     <div class="field">
-      <label>Routing preference</label>
-      <select id="settings-threshold">
-        <option value="disabled">Always use cloud APIs</option>
-        <option value="simple">Use local AI for quick, simple tasks (recommended)</option>
-        <option value="moderate">Use local AI for most tasks</option>
-        <option value="always">Always use local AI (offline mode)</option>
+      <label>Routing decision engine</label>
+      <select id="settings-router-mode">
+        <option value="local">Local LLM (default) — Ollama makes routing decisions; falls back to Python if unavailable</option>
+        <option value="python">Python scoring only — deterministic scheduling, no LLM call (fastest)</option>
+        <option value="api">Cloud API LLM — a fast cloud model makes routing decisions</option>
       </select>
-      <div class="settings-hint" id="settings-hint-text">
-        Cloud APIs will be used for all requests. Your local Ollama model is only used as a fallback when all cloud quotas are exhausted.
-      </div>
+      <div class="hint" style="margin-top:6px" id="router-mode-hint"></div>
+    </div>
+
+    <div class="field" style="margin-top:16px">
+      <label>Local AI fallback preference</label>
+      <select id="settings-threshold">
+        <option value="disabled">Disabled — always use cloud APIs (local is last resort only)</option>
+        <option value="simple">Simple tasks — use local AI for short single-turn requests</option>
+        <option value="moderate">Most tasks — use local AI for most requests</option>
+        <option value="always">Always — local AI only (offline mode)</option>
+      </select>
+      <div class="settings-hint" id="settings-hint-text"></div>
     </div>
 
     <button class="btn-save" onclick="saveSettings()">Save Settings</button>
@@ -943,8 +965,11 @@ async function loadSettings(){
     const r=await fetch('/api/settings');
     const d=await r.json();
     const sel=document.getElementById('settings-threshold');
-    if(sel)sel.value=d.local_only_threshold||'simple';
+    if(sel)sel.value=d.local_only_threshold||'disabled';
+    const rsel=document.getElementById('settings-router-mode');
+    if(rsel)rsel.value=d.router_mode||'local';
     updateSettingsHint();
+    updateRouterModeHint();
   }catch(e){console.warn('Could not load settings:',e);}
   loadLocalModel();
 }
@@ -988,21 +1013,33 @@ async function saveLocalModel(){
   btn.disabled=false;
 }
 
+const _routerModeHints={
+  'local':'Ollama runs locally on your machine and picks the best cloud provider for each request. If Ollama is unavailable, Python scheduling is used automatically.',
+  'python':'Pure deterministic scheduling — no LLM call. Fastest routing path; always available. Uses OS-inspired heuristics (budget, fairness, complexity matching).',
+  'api':'A fast cloud model (e.g. Cerebras llama3.1-8b) makes routing decisions. Consumes a small amount of quota per request but works even without a local Ollama install.',
+};
+function updateRouterModeHint(){
+  const val=document.getElementById('settings-router-mode').value;
+  const hint=document.getElementById('router-mode-hint');
+  if(hint)hint.textContent=_routerModeHints[val]||'';
+}
 function updateSettingsHint(){
   const val=document.getElementById('settings-threshold').value;
   const hint=document.getElementById('settings-hint-text');
   if(hint)hint.textContent=_settingsHints[val]||'';
 }
 
+document.getElementById('settings-router-mode').addEventListener('change',updateRouterModeHint);
 document.getElementById('settings-threshold').addEventListener('change',updateSettingsHint);
 
 async function saveSettings(){
   const btn=document.querySelector('#tab-settings .btn-save');
   const msg=document.getElementById('settings-save-msg');
-  const val=document.getElementById('settings-threshold').value;
+  const threshold=document.getElementById('settings-threshold').value;
+  const routerMode=document.getElementById('settings-router-mode').value;
   btn.disabled=true; msg.textContent='Saving…'; msg.className='save-msg';
   try{
-    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({local_only_threshold:val})});
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({local_only_threshold:threshold,router_mode:routerMode})});
     if(!r.ok)throw new Error(await r.text());
     msg.textContent='Saved!';
     msg.className='save-msg ok';
@@ -1012,6 +1049,26 @@ async function saveSettings(){
     msg.className='save-msg err';
   }
   btn.disabled=false;
+}
+
+async function clearHistory(period){
+  const labels={'hour':'past hour','day':'past day','month':'past month','all':'ALL history'};
+  if(!confirm('Delete ' + labels[period] + ' from usage history? This cannot be undone.')) return;
+  const msg=document.getElementById('clear-history-msg');
+  msg.style.color='var(--muted)';
+  msg.textContent='Deleting\u2026';
+  try{
+    const r=await fetch('/api/clear-history',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({period})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.error||r.statusText);
+    msg.style.color='var(--green)';
+    msg.textContent=`Deleted ${d.rows_deleted} record${d.rows_deleted===1?'':'s'}.`;
+    fetchAndUpdate();  // refresh charts immediately
+    setTimeout(()=>{msg.textContent='';},4000);
+  }catch(e){
+    msg.style.color='#e57373';
+    msg.textContent='Error: '+e.message;
+  }
 }
 
 let countdown=10;

@@ -317,4 +317,9 @@ proxy:
   output_token_reserve: 4096
   memory_warning_threshold: 0.80
   memory_critical_threshold: 0.90
-  local_only_threshold: "simple"  # disabled | simple | moderate | always
+  local_only_threshold: "disabled"  # disabled | simple | moderate | always
+                                    # "disabled" = always prefer cloud APIs; local is last resort only
+  router_mode: "local"              # local | python | api
+                                    # local  = use local Ollama LLM for routing decisions (default)
+                                    # python = deterministic Python scoring only (fastest, no LLM call)
+                                    # api    = use a fast cloud API model for routing decisions

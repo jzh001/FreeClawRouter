@@ -641,6 +641,115 @@ async def _ask_ollama_router(
 
 
 # ---------------------------------------------------------------------------
+# Cloud API routing call (router_mode = "api")
+# ---------------------------------------------------------------------------
+
+async def _ask_cloud_router(
+    candidates: list[CandidateInfo],
+    input_tokens: int,
+    complexity: str,
+    recommended_idx: int,
+    providers: list[ProviderConfig],
+    timeout: float = 15.0,
+    adaptive_mode: bool = False,
+    local_model: str = "",
+) -> int:
+    """
+    Use a fast cloud API model to confirm / override the Python-computed
+    routing recommendation.  Falls back to the Python recommendation on any
+    error so the proxy never stalls.
+
+    Model selection: prefer providers with a model tagged "fast" and the
+    lowest provider priority number.  The routing request is tiny (single
+    short prompt → single digit reply) so it costs negligible quota.
+
+    Returns the chosen index into `candidates`, or len(candidates) as the
+    sentinel for "route to local Ollama" (only possible in adaptive_mode).
+    """
+    # Pick the best available fast cloud model for routing
+    router_provider: Optional[ProviderConfig] = None
+    router_model_id: Optional[str] = None
+
+    # Sort providers by priority; within each provider prefer "fast" tagged models
+    sorted_providers = sorted(providers, key=lambda p: p.priority)
+    for p in sorted_providers:
+        fast = [m for m in p.models if "fast" in m.tags]
+        if fast:
+            router_provider = p
+            router_model_id = sorted(fast, key=lambda m: m.priority)[0].id
+            break
+    if router_provider is None and sorted_providers:
+        # No "fast" model found — use first model of highest-priority provider
+        router_provider = sorted_providers[0]
+        router_model_id = sorted(router_provider.models, key=lambda m: m.priority)[0].id
+
+    if router_provider is None or router_model_id is None:
+        logger.debug("Cloud router: no provider available, using Python recommendation.")
+        return recommended_idx
+
+    prompt = _build_routing_prompt(
+        candidates, input_tokens, complexity, recommended_idx,
+        local_model=local_model, adaptive_mode=adaptive_mode,
+    )
+    total_options = len(candidates) + (1 if adaptive_mode and local_model else 0)
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a routing controller. You must reply with ONLY a single integer "
+                "— the option number you choose. No explanation, no punctuation, nothing else."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{router_provider.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {router_provider.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": router_model_id,
+                    "messages": messages,
+                    "max_tokens": 8,
+                    "temperature": 0,
+                    "stream": False,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+
+            m = re.search(r"\d+", text)
+            if m:
+                chosen_num = int(m.group())
+                chosen_idx = chosen_num - 1
+                if 0 <= chosen_idx < len(candidates):
+                    logger.debug(
+                        "Cloud router (%s/%s) chose option %d",
+                        router_provider.name, router_model_id, chosen_num,
+                    )
+                    return chosen_idx
+                if adaptive_mode and chosen_idx == len(candidates):
+                    logger.info(
+                        "Cloud router chose local fallback (option %d)", chosen_num,
+                    )
+                    return len(candidates)
+            logger.warning("Cloud router returned unparseable response: %r", text[:60])
+
+    except Exception as exc:
+        logger.warning(
+            "Cloud router call failed (%s); using Python recommendation (option %d).",
+            exc, recommended_idx + 1,
+        )
+
+    return recommended_idx
+
+
+# ---------------------------------------------------------------------------
 # Main router
 # ---------------------------------------------------------------------------
 
@@ -756,29 +865,51 @@ class HybridRouter:
             )
             return RouteDecision(provider=info.provider, model=info.model)
 
-        # ----- Tier 2: Scheduling score + LLM confirmation -----
+        # ----- Tier 2: Scheduling score + optional LLM confirmation -----
         # Sort by score descending; Python recommendation = highest score.
         raw_candidates.sort(key=lambda c: c.score, reverse=True)
         recommended_idx = 0  # best Python score
 
-        # When threshold == "disabled", let the local LLM router adaptively
-        # decide whether to route to local Ollama (RULE 0 in the prompt).
+        router_mode = cfg.proxy.router_mode  # "local" | "python" | "api"
+
+        # Adaptive mode: let the LLM router also consider routing to local Ollama
+        # when cloud budgets are running low (RULE 0 in the prompt).
         adaptive_mode = (
             threshold == "disabled"
             and cfg.local.fallback_enabled
             and len(raw_candidates) >= 2
+            and router_mode in ("local", "api")
         )
 
-        idx = await _ask_ollama_router(
-            candidates=raw_candidates,
-            input_tokens=input_tokens,
-            complexity=complexity,
-            ollama_base_url=cfg.local.base_url,
-            router_model=cfg.local.router_model,
-            recommended_idx=recommended_idx,
-            local_model=cfg.local.fallback_model if adaptive_mode else "",
-            adaptive_mode=adaptive_mode,
-        )
+        if router_mode == "python":
+            # Pure Python scheduling — fastest path, no LLM call at all
+            idx = recommended_idx
+            router_label = "python"
+        elif router_mode == "api":
+            # Use a fast cloud API model to confirm / override the recommendation
+            idx = await _ask_cloud_router(
+                candidates=raw_candidates,
+                input_tokens=input_tokens,
+                complexity=complexity,
+                recommended_idx=recommended_idx,
+                providers=cfg.providers,
+                local_model=cfg.local.fallback_model if adaptive_mode else "",
+                adaptive_mode=adaptive_mode,
+            )
+            router_label = "cloud-api"
+        else:
+            # Default: "local" — use local Ollama LLM for routing decisions
+            idx = await _ask_ollama_router(
+                candidates=raw_candidates,
+                input_tokens=input_tokens,
+                complexity=complexity,
+                ollama_base_url=cfg.local.base_url,
+                router_model=cfg.local.router_model,
+                recommended_idx=recommended_idx,
+                local_model=cfg.local.fallback_model if adaptive_mode else "",
+                adaptive_mode=adaptive_mode,
+            )
+            router_label = "local-llm"
 
         # Sentinel: LLM chose local Ollama (adaptive conservation)
         if idx == len(raw_candidates):
@@ -786,8 +917,9 @@ class HybridRouter:
 
         chosen = raw_candidates[idx]
         logger.info(
-            "Route → %s/%s  (score=%.0f, LLM=%s, complexity=%s, %d candidates)",
+            "Route → %s/%s  (score=%.0f, router=%s, decision=%s, complexity=%s, %d candidates)",
             chosen.provider.name, chosen.model.id, chosen.score,
+            router_label,
             "confirmed" if idx == recommended_idx else f"overrode to #{idx + 1}",
             complexity,
             len(raw_candidates),

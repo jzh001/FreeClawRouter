@@ -45,10 +45,10 @@ Ollama runs AI models on your own computer. FreeClawRouter uses it for smarter r
 3. Open a **Terminal** (macOS/Linux) or **Command Prompt** (Windows) and run:
 
 ```
-ollama pull gpt-oss:20b
+ollama pull phi4-mini
 ```
 
-This downloads a ~12 GB AI model. It only needs to be done once. You can choose a smaller model from the dashboard Settings tab later (`qwen3.5:4b` is ~2.5 GB, much faster to download).
+This downloads a ~2.5 GB AI model. It only needs to be done once. You can choose a different model from the dashboard Settings tab later (`gpt-oss:20b` is a larger ~12 GB reasoning model, or `qwen3.5:4b` is another ~2.5 GB option).
 
 > **Why on the host instead of inside Docker?** Running Ollama on your machine directly means it can use your GPU (Metal on Apple Silicon, CUDA on NVIDIA) for fast inference, and the model files are shared — no duplicate storage.
 
@@ -195,7 +195,7 @@ To chat with your AI assistant through Telegram or WhatsApp, click the **Messagi
 
 **Ollama model not found / local AI not working**
 - Make sure Ollama is running on your machine (open the Ollama app or run `ollama serve` in a terminal)
-- Run `ollama pull gpt-oss:20b` if you haven't already
+- Run `ollama pull phi4-mini` if you haven't already (or the model you selected in Settings)
 - On Linux, verify Docker can reach the host: `docker exec freeclawrouter_proxy curl -s http://host.docker.internal:11434` should return a response
 
 **Everything is slow / using local AI all the time**

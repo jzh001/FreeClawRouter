@@ -80,7 +80,8 @@ class ProxyConfig:
     output_token_reserve: int = 4096
     memory_warning_threshold: float = 0.80
     memory_critical_threshold: float = 0.90
-    local_only_threshold: str = "simple"  # disabled | simple | moderate | always
+    local_only_threshold: str = "disabled"  # disabled | simple | moderate | always
+    router_mode: str = "local"             # local | python | api
 
 
 @dataclass
@@ -200,7 +201,8 @@ def load_config(config_dir: str | Path = ".") -> AppConfig:
         output_token_reserve=proxy_raw.get("output_token_reserve", 4096),
         memory_warning_threshold=proxy_raw.get("memory_warning_threshold", 0.80),
         memory_critical_threshold=proxy_raw.get("memory_critical_threshold", 0.90),
-        local_only_threshold=proxy_raw.get("local_only_threshold", "simple"),
+        local_only_threshold=proxy_raw.get("local_only_threshold", "disabled"),
+        router_mode=proxy_raw.get("router_mode", "local"),
     )
 
     return AppConfig(providers=providers, local=local, proxy=proxy)
