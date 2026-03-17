@@ -18,9 +18,10 @@ Before you start, make sure you have:
 
 - A computer running **macOS**, **Windows 10/11**, or **Linux**
 - **Docker Desktop** installed (we will install this in step 3)
-- **Ollama** installed (we will install this in step 4)
 - About **15 minutes** of free time
 - A free account with at least one AI provider (we will set this up in step 6)
+
+**Ollama is optional.** If you install it, you get smarter routing decisions and a local AI fallback when all cloud quotas are exhausted. Without it, cloud APIs handle everything — and you can always add Ollama later. A green/red indicator on the dashboard Settings tab shows whether Ollama is connected.
 
 ---
 
@@ -35,9 +36,9 @@ Docker Desktop is the tool that runs FreeClawRouter in an isolated container —
 
 ---
 
-## 4. Install Ollama and download the AI model
+## 4. (Optional) Install Ollama and download a local AI model
 
-Ollama runs AI models on your own computer. FreeClawRouter uses it for smart routing decisions and as a fallback when all cloud API quotas are exhausted.
+Ollama runs AI models on your own computer. FreeClawRouter uses it for smarter routing decisions and as a fallback when all cloud API quotas are exhausted. **You can skip this step** and FreeClawRouter will still work using cloud APIs only.
 
 1. Go to [https://ollama.com](https://ollama.com) and download Ollama for your operating system
 2. Install it by opening the downloaded file and following the prompts
@@ -47,9 +48,11 @@ Ollama runs AI models on your own computer. FreeClawRouter uses it for smart rou
 ollama pull gpt-oss:20b
 ```
 
-This downloads a ~12 GB AI model to your computer. It only needs to be done once. Grab a coffee — it may take a few minutes depending on your internet speed.
+This downloads a ~12 GB AI model. It only needs to be done once. You can choose a smaller model from the dashboard Settings tab later (`qwen3.5:4b` is ~2.5 GB, much faster to download).
 
 > **Why on the host instead of inside Docker?** Running Ollama on your machine directly means it can use your GPU (Metal on Apple Silicon, CUDA on NVIDIA) for fast inference, and the model files are shared — no duplicate storage.
+
+> **Can I skip this entirely?** Yes. Without Ollama, FreeClawRouter routes everything through cloud APIs. The dashboard Settings tab will show a red indicator for the local model status, which is normal if you haven't installed Ollama.
 
 ---
 
@@ -166,7 +169,8 @@ You will see:
 
 - **Usage tab** — live charts showing requests, tokens, and provider health
 - **Messaging Apps tab** — connect Telegram or WhatsApp to your AI assistant
-- **Settings tab** — choose whether to use your local AI model for simple tasks
+- **Test Models tab** — send a quick test to every configured model to verify they all work
+- **Settings tab** — choose when to use your local AI model, and which local model to use; also shows whether Ollama is connected (green dot = running, red = not detected)
 
 The dashboard refreshes automatically every 10 seconds.
 

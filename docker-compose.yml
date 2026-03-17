@@ -121,6 +121,11 @@ services:
       # A dummy key is required syntactically; FreeClawRouter ignores it and uses
       # the real provider keys from its own .env
       - OPENAI_API_KEY=freeclawrouter-local-key
+      # Web search: OpenClaw auto-detects the provider from whichever key is present
+      # (priority: Brave → Gemini → Perplexity → Grok).  GOOGLE_AI_API_KEY enables
+      # Gemini-grounded search — the only key we already have from .env.
+      # This key is used ONLY for web_search/web_fetch tool calls, not for LLM routing.
+      - GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY}
     # Drop all Linux capabilities for maximum isolation
     cap_drop:
       - ALL

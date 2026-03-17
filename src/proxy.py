@@ -288,6 +288,23 @@ class ForwardingProxy:
                     # Stream started successfully — return to caller for piping
                     return 200, {"Content-Type": "text/event-stream"}, gen
                 except _RetryableError as exc:
+                    if decision.is_local_fallback:
+                        # Local Ollama is unreachable — don't retry, return a clear error
+                        logger.error(
+                            "Local Ollama unavailable (%s) — all providers exhausted", exc
+                        )
+                        return 503, {}, {
+                            "error": {
+                                "message": (
+                                    "Local Ollama is not reachable. "
+                                    "Make sure Ollama is running on your machine "
+                                    "(https://ollama.com) and the model is pulled. "
+                                    "You can also disable local fallback in Settings."
+                                ),
+                                "type": "local_unavailable",
+                                "code": 503,
+                            }
+                        }
                     logger.warning(
                         "Retryable error from %s (attempt %d/%d): %s — trying next provider",
                         exc.provider, attempt + 1, max_attempts, exc,
@@ -300,6 +317,21 @@ class ForwardingProxy:
                     failed_providers=failed_providers,
                 )
                 if result is None:
+                    if decision.is_local_fallback:
+                        # Local Ollama is unreachable — don't retry, return a clear error
+                        logger.error("Local Ollama unavailable — all providers exhausted")
+                        return 503, {}, {
+                            "error": {
+                                "message": (
+                                    "Local Ollama is not reachable. "
+                                    "Make sure Ollama is running on your machine "
+                                    "(https://ollama.com) and the model is pulled. "
+                                    "You can also disable local fallback in Settings."
+                                ),
+                                "type": "local_unavailable",
+                                "code": 503,
+                            }
+                        }
                     # Sentinel: retryable failure — loop continues
                     failed_providers.add(provider_name)
                     continue

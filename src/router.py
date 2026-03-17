@@ -599,9 +599,14 @@ async def _ask_ollama_router(
                     "model": router_model,
                     "prompt": prompt,
                     "stream": False,
+                    # gpt-oss:20b uses string values "low"/"medium"/"high" for thinking,
+                    # NOT boolean true/false.  "low" minimises the reasoning trace so the
+                    # visible response (the option number) is reached within num_predict.
+                    # Other models that don't support this field ignore it safely.
+                    "think": "low",
                     "options": {
                         "temperature": 0,      # deterministic — no creativity needed
-                        "num_predict": 12,     # enough for a 2-digit number + whitespace
+                        "num_predict": 64,     # enough for low-thinking CoT + 2-digit number
                         "top_k": 1,
                     },
                 },
@@ -791,9 +796,11 @@ class HybridRouter:
 
     def _local_fallback(self, input_tokens: int) -> RouteDecision:
         cfg = self._config
-        if not cfg.local.fallback_enabled:
+        if not cfg.local.fallback_enabled or cfg.local.fallback_model == "none":
             raise RuntimeError(
-                "All free-tier API rate limits exhausted and local fallback is disabled."
+                "All free-tier API rate limits exhausted and local fallback is disabled. "
+                "Enable a local Ollama model in the dashboard Settings tab or add more "
+                "API provider keys."
             )
 
         border = "=" * 70

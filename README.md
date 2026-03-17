@@ -26,18 +26,26 @@ OpenClaw → FreeClawRouter (port 8765) → [ Cerebras / Groq / Gemini / OpenRou
 | Dependency | Notes |
 |---|---|
 | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | v24+ recommended |
-| [Ollama](https://ollama.com) | Must be running on the host (or in Docker) |
-| `gpt-oss:20b` model | `ollama pull gpt-oss:20b` |
+| At least one API key | Cerebras, Groq, Gemini, OpenRouter, NVIDIA, SambaNova, or Mistral |
+| [Ollama](https://ollama.com) | **Optional but recommended** — enables local fallback and smarter routing |
 
 ---
 
 ## Quick Start
 
-### 1. Pull the default local model
+### 1. (Optional) Install Ollama for local fallback
+
+Ollama is not required — cloud APIs work without it. However, it unlocks smarter
+routing decisions and allows the proxy to keep working when all cloud quotas are
+exhausted.
 
 ```bash
+# Install from https://ollama.com, then pull the default router model:
 ollama pull gpt-oss:20b
 ```
+
+You can choose a different local model from the dashboard **Settings** tab after
+startup (`gpt-oss:20b`, `qwen3.5:9b/4b/2b/0.8b`, or disable local fallback).
 
 ### 2. Clone this repository
 
@@ -46,7 +54,7 @@ git clone https://github.com/your-username/freeclawrouter.git
 cd freeclawrouter
 ```
 
-### 3. Create your `.env` file with free-tier API keys
+### 3. Create your `.env` file with free-tier API keys with free-tier API keys
 
 ```bash
 cp .env.example .env
@@ -245,18 +253,28 @@ in E.164 format (e.g. `"+15551234567"`) to `"allowFrom"`.
 
 ## Switching the Local Model
 
-Change the `router_model` and `fallback_model` in `config.yaml` to any model you have pulled in Ollama:
+The easiest way is via the dashboard **Settings** tab — select from the dropdown and click Save. No restart needed.
+
+Alternatively, edit `config.yaml` directly:
 
 ```yaml
 local:
   ollama:
-    router_model: "llama3.3:70b"   # Use a larger model for routing decisions
-    fallback_model: "llama3.3:70b" # Use a larger model for generation
+    router_model: "gpt-oss:20b"    # used for routing decisions — must be fast
+    fallback_model: "gpt-oss:20b"  # used for actual inference fallback
+    fallback_enabled: true          # set to false to disable local fallback
 ```
 
-Then restart: `docker compose restart freeclawrouter`.
+Then restart: `docker compose restart freeclawrouter`. See `ollama list` for installed models.
 
-You can see all locally available models with `ollama list`.
+## Web Search in OpenClaw
+
+OpenClaw supports web search via multiple providers. Add your `GOOGLE_AI_API_KEY` to
+`.env` (you likely have this already for Gemini) — FreeClawRouter passes it to the
+OpenClaw container automatically. OpenClaw will use Gemini for web search grounding.
+
+Other search providers (Brave, Perplexity, Grok) are also supported if you have those
+API keys. Add them to `.env` and the OpenClaw container's environment in `docker-compose.yml`.
 
 ---
 
@@ -292,7 +310,9 @@ The dashboard auto-refreshes every 10 seconds and shows:
 | **Tokens today (bar)** | Token consumption by provider |
 | **Last 24 h (line)** | Hourly request volume per provider — see traffic patterns over time |
 | **Last 7 days (bar)** | Daily request volume stacked by provider |
-| **Settings tab** | Configure the local AI routing preference — choose when to use local Ollama instead of cloud APIs, without a restart |
+| **Test Models tab** | Send a one-shot test to every configured model in parallel; shows pass/fail, latency, and response snippet |
+| **Settings → Routing** | Choose when to use local Ollama vs cloud APIs (disabled/simple/moderate/always) — no restart needed |
+| **Settings → Local Model** | Ollama connection status indicator + dropdown to select which local model to use; supports `gpt-oss:20b`, `qwen3.5` variants, or "none" to disable |
 
 Usage data is stored in a persistent SQLite database (`data/freeclawrouter.db` inside
 the Docker volume `freeclawrouter_data`). It survives container restarts and keeps a
@@ -313,6 +333,9 @@ http://<host-ip>:8765/dashboard
 | `GET /api/dashboard-data` | Dashboard data as JSON (providers, health, charts) |
 | `GET /api/settings` | Read current runtime settings (e.g. local_only_threshold) |
 | `POST /api/settings` | Update runtime settings (persisted, no restart needed) |
+| `GET /api/local-model` | Read local model config and Ollama reachability status |
+| `POST /api/local-model` | Change local fallback model (persisted, no restart needed) |
+| `POST /api/test-models` | Test all configured models in parallel; returns pass/fail + latency |
 | `POST /v1/chat/completions` | Main proxy endpoint (OpenAI-compatible) |
 | `GET /v1/models` | List all configured models |
 | `GET /health` | Liveness probe |

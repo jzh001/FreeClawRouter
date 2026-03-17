@@ -8,6 +8,8 @@ FastAPI application. Exposes an OpenAI-compatible API surface:
   GET  /stats                 — rate-limit diagnostics
   GET  /api/settings          — read runtime settings (local_only_threshold)
   POST /api/settings          — update runtime settings (persisted to JSON)
+  GET  /api/local-model       — read local model config + Ollama status
+  POST /api/local-model       — update local fallback model (persisted to JSON)
 """
 from __future__ import annotations
 
@@ -43,6 +45,18 @@ _proxy: ForwardingProxy | None = None
 
 # Valid values for local_only_threshold
 _VALID_THRESHOLDS = frozenset({"disabled", "simple", "moderate", "always"})
+
+# Available local model choices (shown in the dashboard Settings tab).
+# "none" disables local fallback entirely.
+_LOCAL_MODELS = [
+    "phi4-mini",
+    "gpt-oss:20b",
+    "qwen3.5:9b",
+    "qwen3.5:4b",
+    "qwen3.5:2b",
+    "qwen3.5:0.8b",
+    "none",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +118,16 @@ async def lifespan(app: FastAPI):
     if saved_threshold and saved_threshold in _VALID_THRESHOLDS:
         _config.proxy.local_only_threshold = saved_threshold
         logger.info("Applied persisted local_only_threshold: %s", saved_threshold)
+
+    saved_model = persisted.get("local_fallback_model")
+    if saved_model and saved_model in _LOCAL_MODELS:
+        if saved_model == "none":
+            _config.local.fallback_enabled = False
+        else:
+            _config.local.fallback_model = saved_model
+            _config.local.router_model = saved_model
+            _config.local.fallback_enabled = True
+        logger.info("Applied persisted local fallback model: %s", saved_model)
 
     _proxy = ForwardingProxy(_config, _registry)
 
@@ -281,18 +305,99 @@ async def post_settings(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/local-model  — read current local model + Ollama status
+# ---------------------------------------------------------------------------
+
+async def _check_ollama(base_url: str, timeout: float = 3.0) -> bool:
+    """Return True if the Ollama server is reachable."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(f"{base_url}/api/version")
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+@app.get("/api/local-model")
+async def get_local_model() -> JSONResponse:
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "not initialised"})
+    ollama_ok = await _check_ollama(_config.local.base_url)
+    current = _config.local.fallback_model if _config.local.fallback_enabled else "none"
+    return JSONResponse({
+        "current_model": current,
+        "available_models": _LOCAL_MODELS,
+        "ollama_reachable": ollama_ok,
+        "fallback_enabled": _config.local.fallback_enabled,
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /api/local-model  — change local fallback model (persisted)
+# ---------------------------------------------------------------------------
+
+@app.post("/api/local-model")
+async def post_local_model(request: Request) -> JSONResponse:
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "not initialised"})
+
+    try:
+        body: dict[str, Any] = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "invalid JSON body"})
+
+    new_model = body.get("model")
+    if new_model is None or new_model not in _LOCAL_MODELS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"invalid model: {new_model!r}. "
+                     f"Must be one of: {_LOCAL_MODELS}"},
+        )
+
+    if new_model == "none":
+        _config.local.fallback_enabled = False
+    else:
+        _config.local.fallback_model = new_model
+        _config.local.router_model = new_model  # use same model for routing
+        _config.local.fallback_enabled = True
+
+    settings = _read_settings()
+    settings["local_fallback_model"] = new_model
+    _write_settings(settings)
+
+    logger.info("Local model updated: %s (fallback_enabled=%s)",
+                new_model, _config.local.fallback_enabled)
+    return JSONResponse({
+        "ok": True,
+        "model": new_model,
+        "fallback_enabled": _config.local.fallback_enabled,
+    })
+
+
+# ---------------------------------------------------------------------------
 # POST /api/test-models  — connectivity test for all configured models
 # ---------------------------------------------------------------------------
 
 _TEST_PROMPT = [{"role": "user", "content": "Reply with exactly one word: OK"}]
 _TEST_TIMEOUT = 20.0
+_TEST_REASONING_TIMEOUT = 45.0  # reasoning models generate a think trace before answering
+_LOCAL_TEST_TIMEOUT = 60.0      # local models may need time to load into GPU memory
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    """True for both asyncio.TimeoutError and httpx timeout exceptions."""
+    return isinstance(exc, asyncio.TimeoutError) or isinstance(exc, httpx.TimeoutException)
 
 
 async def _test_cloud_model(provider_name: str, base_url: str, api_key: str,
-                             model_id: str, timeout: float) -> dict[str, Any]:
+                             model_id: str, timeout: float,
+                             is_reasoning: bool = False) -> dict[str, Any]:
     url = f"{base_url}/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": model_id, "messages": _TEST_PROMPT, "max_tokens": 10, "stream": False}
+    # Reasoning models generate a hidden think trace that consumes tokens before the
+    # visible answer — use a much larger budget so the output is never truncated.
+    max_tokens = 512 if is_reasoning else 128
+    payload = {"model": model_id, "messages": _TEST_PROMPT, "max_tokens": max_tokens, "stream": False}
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -325,21 +430,22 @@ async def _test_cloud_model(provider_name: str, base_url: str, api_key: str,
         _storage.record_request(provider_name, model_id, is_error=True)
         return {"provider": provider_name, "model": model_id, "ok": False,
                 "latency_ms": latency, "error": error_msg, "response": resp.text[:120]}
-    except asyncio.TimeoutError:
-        _health.record_error(provider_name, "timeout")
-        _storage.record_request(provider_name, model_id, is_error=True)
-        return {"provider": provider_name, "model": model_id, "ok": False,
-                "latency_ms": int(timeout * 1000), "error": "timeout"}
     except Exception as exc:
+        elapsed = int((time.monotonic() - start) * 1000)
+        if _is_timeout_error(exc):
+            _health.record_error(provider_name, "timeout")
+            _storage.record_request(provider_name, model_id, is_error=True)
+            return {"provider": provider_name, "model": model_id, "ok": False,
+                    "latency_ms": elapsed, "error": f"timeout (>{int(timeout)}s)"}
         _health.record_error(provider_name, str(exc))
         _storage.record_request(provider_name, model_id, is_error=True)
         return {"provider": provider_name, "model": model_id, "ok": False,
-                "latency_ms": int((time.monotonic() - start) * 1000), "error": str(exc)[:120]}
+                "latency_ms": elapsed, "error": str(exc)[:120] or repr(exc)[:120]}
 
 
 async def _test_local_model(base_url: str, model_id: str, timeout: float) -> dict[str, Any]:
     url = f"{base_url}/v1/chat/completions"
-    payload = {"model": model_id, "messages": _TEST_PROMPT, "max_tokens": 10, "stream": False}
+    payload = {"model": model_id, "messages": _TEST_PROMPT, "max_tokens": 32, "stream": False}
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -363,22 +469,22 @@ async def _test_local_model(base_url: str, model_id: str, timeout: float) -> dic
         return {"provider": "local (Ollama)", "model": model_id, "ok": False,
                 "latency_ms": latency, "error": f"HTTP {resp.status_code}",
                 "response": resp.text[:120]}
-    except asyncio.TimeoutError:
-        _storage.record_request("local", model_id, is_error=True, is_local=True)
-        return {"provider": "local (Ollama)", "model": model_id, "ok": False,
-                "latency_ms": int(timeout * 1000), "error": "timeout"}
     except Exception as exc:
+        elapsed = int((time.monotonic() - start) * 1000)
         _storage.record_request("local", model_id, is_error=True, is_local=True)
+        if _is_timeout_error(exc):
+            return {"provider": "local (Ollama)", "model": model_id, "ok": False,
+                    "latency_ms": elapsed, "error": f"timeout (>{int(timeout)}s)"}
         return {"provider": "local (Ollama)", "model": model_id, "ok": False,
-                "latency_ms": int((time.monotonic() - start) * 1000), "error": str(exc)[:120]}
+                "latency_ms": elapsed, "error": str(exc)[:120] or repr(exc)[:120]}
 
 
 @app.post("/api/test-models")
 async def test_models() -> JSONResponse:
     """
-    Send a minimal one-shot request to every configured model in parallel
+    Send a minimal one-shot request to every configured cloud model in parallel
     and return pass/fail, latency, and a snippet of the response.
-    Includes the local Ollama fallback model.
+    Local Ollama is tested separately via /api/test-local (it may need time to load).
     """
     if _config is None:
         return JSONResponse(status_code=503, content={"error": "not initialised"})
@@ -387,15 +493,11 @@ async def test_models() -> JSONResponse:
 
     for provider in _config.providers:
         for model in provider.models:
+            timeout = _TEST_REASONING_TIMEOUT if model.is_reasoning else _TEST_TIMEOUT
             tasks.append(asyncio.create_task(
                 _test_cloud_model(provider.name, provider.base_url, provider.api_key,
-                                  model.id, _TEST_TIMEOUT)
+                                  model.id, timeout, is_reasoning=model.is_reasoning)
             ))
-
-    if _config.local.fallback_enabled:
-        tasks.append(asyncio.create_task(
-            _test_local_model(_config.local.base_url, _config.local.fallback_model, _TEST_TIMEOUT)
-        ))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     clean = [
@@ -404,6 +506,26 @@ async def test_models() -> JSONResponse:
     ]
     passed = sum(1 for r in clean if r.get("ok"))
     return JSONResponse({"results": clean, "passed": passed, "total": len(clean)})
+
+
+@app.post("/api/test-local")
+async def test_local() -> JSONResponse:
+    """
+    Test the configured local Ollama model with a generous 60-second timeout.
+    Local models may need time to load into GPU memory on first call.
+    """
+    if _config is None:
+        return JSONResponse(status_code=503, content={"error": "not initialised"})
+
+    if not _config.local.fallback_enabled or _config.local.fallback_model == "none":
+        return JSONResponse({"results": [], "passed": 0, "total": 0,
+                             "note": "Local fallback is disabled."})
+
+    result = await _test_local_model(
+        _config.local.base_url, _config.local.fallback_model, _LOCAL_TEST_TIMEOUT
+    )
+    passed = 1 if result.get("ok") else 0
+    return JSONResponse({"results": [result], "passed": passed, "total": 1})
 
 
 # ---------------------------------------------------------------------------

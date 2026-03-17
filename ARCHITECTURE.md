@@ -144,6 +144,14 @@ RULE 5 — TIEBREAKER:    Lower provider priority number wins
 The prompt contains **only scheduling metadata** — no API keys, no user
 message content, no authentication data. This satisfies PRD §4.1.
 
+### Ollama Router Think Mode
+
+`gpt-oss:20b` is a reasoning model that uses string-based thinking levels
+(`"low"`, `"medium"`, `"high"`) rather than boolean `true`/`false`. The router
+call uses `"think": "low"` to minimise the reasoning trace so the visible
+response (the option number) is generated within the `num_predict` token budget.
+Other models that don't support this field ignore it silently.
+
 ---
 
 ## 4. Context Manager
@@ -316,10 +324,14 @@ Request arrives
       │
       ├── Success (2xx)  → record_success(A), return to client
       │
-      ├── Retryable (429/5xx/timeout, BEFORE first byte sent)
+      ├── Retryable (429/5xx/404/timeout, BEFORE first byte sent)
       │     → record_rate_limit(A) or record_error(A)
       │     → add A to failed_providers
       │     → re-route (skip A) → provider B → …
+      │
+      ├── Local Ollama fallback (all cloud providers failed)
+      │     → if Ollama unreachable → return 503 with clear message
+      │     → if fallback_enabled=False → return 503 immediately
       │
       └── Non-retryable 4xx (e.g. 400 Bad Request)
             → return error to client immediately
@@ -330,8 +342,12 @@ Key properties:
   never receives a partial response or an intermediate error frame.
 - **Max attempts**: `len(configured_providers) + 2` (covers all cloud
   providers plus local fallback with one safety margin).
-- **Local as last resort**: if every cloud provider fails, the local
-  Ollama fallback is tried last.  If it also fails, HTTP 502 is returned.
+- **Local as last resort**: if every cloud provider fails, local Ollama
+  is tried. If Ollama is unreachable, a clear 503 is returned immediately
+  (no infinite retry loop).
+- **Ollama optional**: FreeClawRouter operates without Ollama — cloud APIs
+  handle everything. The router falls back to the Python recommendation if
+  Ollama is unavailable. The dashboard Settings tab shows Ollama's status.
 - **No mid-stream retry**: once bytes have been yielded to the client,
   no retry is possible (agentic constraint, see §8 above).
 

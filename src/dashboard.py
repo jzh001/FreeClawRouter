@@ -251,6 +251,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   .settings-card h3{font-size:17px;font-weight:700;margin-bottom:4px}
   .settings-card .tagline{color:var(--muted);font-size:13px;margin-bottom:20px}
   .settings-hint{color:var(--muted);font-size:13px;line-height:1.6;margin-top:8px}
+  .ollama-status{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:16px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px}
+  .ollama-status .dot{flex-shrink:0}
 
   @media(max-width:900px){
     .charts{grid-template-columns:1fr}
@@ -525,6 +527,35 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <button class="btn-save" onclick="saveSettings()">Save Settings</button>
     <div class="save-msg" id="settings-save-msg"></div>
   </div>
+
+  <div class="settings-card">
+    <h3>Local AI Model (Ollama)</h3>
+    <p class="tagline">Choose which local model Ollama uses for fallback and routing decisions. Ollama is optional — cloud APIs work without it.</p>
+
+    <div class="ollama-status" id="ollama-status-row">
+      <span class="dot dot-gray" id="ollama-dot"></span>
+      <span id="ollama-status-text" style="color:var(--muted)">Checking Ollama&hellip;</span>
+    </div>
+
+    <div class="field">
+      <label>Local model</label>
+      <select id="local-model-select">
+        <option value="phi4-mini">phi4-mini (default — fast &amp; capable, ~2.5 GB)</option>
+        <option value="gpt-oss:20b">gpt-oss:20b — best reasoning quality (~12 GB)</option>
+        <option value="qwen3.5:9b">qwen3.5:9b — capable mid-size model (~5 GB)</option>
+        <option value="qwen3.5:4b">qwen3.5:4b — balanced speed &amp; quality (~2.5 GB)</option>
+        <option value="qwen3.5:2b">qwen3.5:2b — lightweight, very fast (~1.5 GB)</option>
+        <option value="qwen3.5:0.8b">qwen3.5:0.8b — minimal, fastest (~0.5 GB)</option>
+        <option value="none">None — disable local fallback</option>
+      </select>
+      <div class="hint" style="margin-top:6px">
+        Pull the chosen model with: <code>ollama pull &lt;model&gt;</code>
+      </div>
+    </div>
+
+    <button class="btn-save" onclick="saveLocalModel()">Save Local Model</button>
+    <div class="save-msg" id="local-model-save-msg"></div>
+  </div>
 </main>
 </div><!-- end settings tab -->
 
@@ -534,8 +565,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <div id="tab-test" style="display:none">
 <main>
   <div class="settings-card" style="max-width:900px">
-    <h2 style="margin:0 0 8px">Model Connectivity Test</h2>
-    <p style="color:var(--muted);margin:0 0 20px">Sends a one-shot &ldquo;Reply with OK&rdquo; request to every configured model in parallel. Tests both cloud providers and local Ollama.</p>
+    <h2 style="margin:0 0 8px">Cloud Model Connectivity Test</h2>
+    <p style="color:var(--muted);margin:0 0 20px">Sends a one-shot &ldquo;Reply with OK&rdquo; request to every configured cloud model in parallel (20 s timeout each).</p>
     <button class="btn-save" id="test-run-btn" onclick="runModelTests()" style="margin-bottom:24px">&#9654; Run Tests</button>
     <div id="test-status" style="color:var(--muted);font-size:13px;margin-bottom:16px"></div>
     <table id="test-table" style="display:none;width:100%;border-collapse:collapse;font-size:13px">
@@ -551,6 +582,26 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
       <tbody id="test-tbody"></tbody>
     </table>
     <div id="test-summary" style="margin-top:16px;font-weight:600;font-size:14px"></div>
+  </div>
+
+  <div class="settings-card" style="max-width:900px;margin-top:20px">
+    <h2 style="margin:0 0 8px">Local Model Test (Ollama)</h2>
+    <p style="color:var(--muted);margin:0 0 20px">Tests the local Ollama model with a 60-second timeout. The first call may be slow if the model needs to be loaded into memory.</p>
+    <button class="btn-save" id="local-test-btn" onclick="runLocalTest()" style="margin-bottom:24px">&#9654; Test Local Model</button>
+    <div id="local-test-status" style="color:var(--muted);font-size:13px;margin-bottom:16px"></div>
+    <table id="local-test-table" style="display:none;width:100%;border-collapse:collapse;font-size:13px">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border);color:var(--muted)">
+          <th style="text-align:left;padding:8px 12px">Provider</th>
+          <th style="text-align:left;padding:8px 12px">Model</th>
+          <th style="text-align:center;padding:8px 12px">Status</th>
+          <th style="text-align:right;padding:8px 12px">Latency</th>
+          <th style="text-align:left;padding:8px 12px">Response / Error</th>
+        </tr>
+      </thead>
+      <tbody id="local-test-tbody"></tbody>
+    </table>
+    <div id="local-test-summary" style="margin-top:16px;font-weight:600;font-size:14px"></div>
   </div>
 </main>
 </div><!-- end test tab -->
@@ -574,8 +625,26 @@ function switchTab(name) {
 }
 
 // ============================================================
-// Model tests
+// Model tests — shared row renderer
 // ============================================================
+function _renderTestRows(tbody, results) {
+  results.forEach(r => {
+    const ok   = r.ok;
+    const dot  = ok ? '\u2705' : '\u274c';
+    const lat  = r.latency_ms != null ? r.latency_ms + ' ms' : '\u2014';
+    const info = ok ? (r.response || '') : (r.error || 'unknown error');
+    const row  = document.createElement('tr');
+    row.style.borderBottom = '1px solid var(--border)';
+    row.innerHTML = `
+      <td style="padding:8px 12px">${r.provider || ''}</td>
+      <td style="padding:8px 12px;font-family:monospace;font-size:12px">${r.model || ''}</td>
+      <td style="padding:8px 12px;text-align:center">${dot}</td>
+      <td style="padding:8px 12px;text-align:right;color:var(--muted)">${lat}</td>
+      <td style="padding:8px 12px;color:${ok ? 'var(--text)' : '#e57373'};max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${info}">${info}</td>`;
+    tbody.appendChild(row);
+  });
+}
+
 async function runModelTests() {
   const btn    = document.getElementById('test-run-btn');
   const status = document.getElementById('test-status');
@@ -585,7 +654,7 @@ async function runModelTests() {
 
   btn.disabled = true;
   btn.textContent = 'Running\u2026';
-  status.textContent = 'Sending test requests to all models in parallel\u2026 (up to 20 s)';
+  status.textContent = 'Sending test requests to all cloud models in parallel\u2026 (up to 20 s)';
   table.style.display = 'none';
   tbody.innerHTML = '';
   summary.textContent = '';
@@ -593,23 +662,7 @@ async function runModelTests() {
   try {
     const resp = await fetch('/api/test-models', {method:'POST'});
     const data = await resp.json();
-
-    data.results.forEach(r => {
-      const ok   = r.ok;
-      const dot  = ok ? '\u2705' : '\u274c';
-      const lat  = r.latency_ms != null ? r.latency_ms + ' ms' : '\u2014';
-      const info = ok ? (r.response || '') : (r.error || 'unknown error');
-      const row  = document.createElement('tr');
-      row.style.borderBottom = '1px solid var(--border)';
-      row.innerHTML = `
-        <td style="padding:8px 12px">${r.provider || ''}</td>
-        <td style="padding:8px 12px;font-family:monospace;font-size:12px">${r.model || ''}</td>
-        <td style="padding:8px 12px;text-align:center">${dot}</td>
-        <td style="padding:8px 12px;text-align:right;color:var(--muted)">${lat}</td>
-        <td style="padding:8px 12px;color:${ok ? 'var(--text)' : '#e57373'};max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${info}">${info}</td>`;
-      tbody.appendChild(row);
-    });
-
+    _renderTestRows(tbody, data.results);
     table.style.display = '';
     const p = data.passed, t = data.total;
     const color = p === t ? 'var(--green)' : p === 0 ? '#e57373' : '#ffb74d';
@@ -621,6 +674,42 @@ async function runModelTests() {
   } finally {
     btn.disabled = false;
     btn.textContent = '\u25b6 Run Tests';
+  }
+}
+
+async function runLocalTest() {
+  const btn    = document.getElementById('local-test-btn');
+  const status = document.getElementById('local-test-status');
+  const table  = document.getElementById('local-test-table');
+  const tbody  = document.getElementById('local-test-tbody');
+  const summary= document.getElementById('local-test-summary');
+
+  btn.disabled = true;
+  btn.textContent = 'Testing\u2026';
+  status.textContent = 'Waiting for local Ollama model\u2026 (up to 60 s \u2014 first call may be slow while the model loads)';
+  table.style.display = 'none';
+  tbody.innerHTML = '';
+  summary.textContent = '';
+
+  try {
+    const resp = await fetch('/api/test-local', {method:'POST'});
+    const data = await resp.json();
+    if (data.note) {
+      status.textContent = data.note;
+    } else {
+      _renderTestRows(tbody, data.results);
+      table.style.display = '';
+      const p = data.passed, t = data.total;
+      const color = p === t ? 'var(--green)' : '#e57373';
+      summary.style.color = color;
+      summary.textContent = p === t ? 'Local model OK' : 'Local model failed';
+      status.textContent = '';
+    }
+  } catch(e) {
+    status.textContent = 'Test failed: ' + e;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '\u25b6 Test Local Model';
   }
 }
 
@@ -857,6 +946,46 @@ async function loadSettings(){
     if(sel)sel.value=d.local_only_threshold||'simple';
     updateSettingsHint();
   }catch(e){console.warn('Could not load settings:',e);}
+  loadLocalModel();
+}
+
+async function loadLocalModel(){
+  try{
+    const r=await fetch('/api/local-model');
+    const d=await r.json();
+    const sel=document.getElementById('local-model-select');
+    if(sel)sel.value=d.current_model||'phi4-mini';
+    const dot=document.getElementById('ollama-dot');
+    const txt=document.getElementById('ollama-status-text');
+    if(d.ollama_reachable){
+      dot.className='dot dot-g';
+      txt.textContent='Ollama is running on your machine';
+      txt.style.color='var(--green)';
+    }else{
+      dot.className='dot dot-r';
+      txt.textContent='Ollama not detected \u2014 install from ollama.com or ignore if not using local AI';
+      txt.style.color='var(--muted)';
+    }
+  }catch(e){console.warn('Could not load local model:',e);}
+}
+
+async function saveLocalModel(){
+  const btn=document.querySelector('#tab-settings .settings-card:nth-child(2) .btn-save');
+  const msg=document.getElementById('local-model-save-msg');
+  const val=document.getElementById('local-model-select').value;
+  btn.disabled=true; msg.textContent='Saving\u2026'; msg.className='save-msg';
+  try{
+    const r=await fetch('/api/local-model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:val})});
+    if(!r.ok)throw new Error(await r.text());
+    msg.textContent=val==='none'?'Local fallback disabled.':'Saved! Pull the model if not already downloaded.';
+    msg.className='save-msg ok';
+    setTimeout(()=>{msg.textContent='';},4000);
+    loadLocalModel();
+  }catch(e){
+    msg.textContent='Error: '+e.message;
+    msg.className='save-msg err';
+  }
+  btn.disabled=false;
 }
 
 function updateSettingsHint(){
