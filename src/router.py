@@ -593,23 +593,24 @@ async def _ask_ollama_router(
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
+            json_body: dict[str, Any] = {
+                "model": router_model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0,      # deterministic — no creativity needed
+                    "num_predict": 64,
+                    "top_k": 1,
+                },
+            }
+            # gpt-oss variants use string thinking levels ("low"/"medium"/"high").
+            # All other models (phi4-mini, qwen3.5, etc.) reject this field with 400.
+            if "gpt-oss" in router_model:
+                json_body["think"] = "low"
+
             resp = await client.post(
                 f"{ollama_base_url}/api/generate",
-                json={
-                    "model": router_model,
-                    "prompt": prompt,
-                    "stream": False,
-                    # gpt-oss:20b uses string values "low"/"medium"/"high" for thinking,
-                    # NOT boolean true/false.  "low" minimises the reasoning trace so the
-                    # visible response (the option number) is reached within num_predict.
-                    # Other models that don't support this field ignore it safely.
-                    "think": "low",
-                    "options": {
-                        "temperature": 0,      # deterministic — no creativity needed
-                        "num_predict": 64,     # enough for low-thinking CoT + 2-digit number
-                        "top_k": 1,
-                    },
-                },
+                json=json_body,
             )
             resp.raise_for_status()
             text = resp.json().get("response", "").strip()
