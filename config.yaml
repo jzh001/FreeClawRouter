@@ -1,4 +1,4 @@
-# FreeClaw Configuration — last verified 2026-03-16
+# FreeClawRouter Configuration — last verified 2026-03-16
 # Copy this file to config.local.yaml for local overrides (git-ignored).
 # API keys are read from environment variables — never hardcode them here.
 #
@@ -38,32 +38,24 @@ providers:
     rate_limits:
       rpm: 30
       rpd: 14400
-      tpm: 60000
+      tpm: 30000      # conservative: qwen-3-235b has 30K TPM; llama3.1-8b has 60K
       tpd: 1000000
     models:
-      # POWERFUL — best overall capability; ~3,000 t/s on Cerebras hardware
-      - id: "gpt-oss-120b"
-        context_window: 131072
-        description: "OpenAI open-weights 120B (Dec 2025). GPT-4o-class quality at ~3,000 t/s — Cerebras flagship. Strong coding, reasoning, and tool use."
-        tags: [coding, agentic, reasoning]
+      # POWERFUL — 235B MoE; largest available model on Cerebras (preview)
+      - id: "qwen-3-235b-a22b-instruct-2507"
+        context_window: 65536
+        description: "Qwen 3 235B A22B MoE (Jul 2025, preview). Largest model on Cerebras free tier. Strong general reasoning, coding, and instruction following."
+        tags: [coding, reasoning, moe, agentic]
         is_reasoning: false
         priority: 1
 
-      # POWERFUL — largest free model on Cerebras; 355B MoE (preview)
-      - id: "zai-glm-4.7"
-        context_window: 131072
-        description: "Z.ai GLM-4.7 355B MoE (2025, preview). Largest model on Cerebras free tier. Best for the most demanding tasks; currently subject to reduced free limits."
-        tags: [coding, reasoning, moe]
-        is_reasoning: false
-        priority: 2
-
-      # FAST — lightweight; highest sustained throughput at ~2,200 t/s
+      # FAST — lightweight; highest sustained throughput on Cerebras hardware
       - id: "llama3.1-8b"
-        context_window: 131072
-        description: "Llama 3.1 8B (Jul 2024). ~2,200 t/s — use for simple, high-volume tasks where speed matters more than capability."
+        context_window: 8192
+        description: "Llama 3.1 8B (Jul 2024). Production model; ~2,200 t/s — use for simple, high-volume tasks where speed matters more than capability."
         tags: [fast]
         is_reasoning: false
-        priority: 3
+        priority: 2
 
   # --------------------------------------------------------------------------
   # Groq — LPU inference; ultra-low latency
@@ -168,20 +160,20 @@ providers:
       rpd: 200
     models:
       # POWERFUL (CODING) — Qwen3 Coder 480B; best free coding model on OR
-      - id: "qwen/qwen3-coder:free"
-        context_window: 262144
-        description: "Qwen3 Coder 480B MoE (2025). Best free coding-specialised model on OpenRouter. Large 262K context; strong SWE-Bench scores."
-        tags: [coding, agentic, moe, large_context]
-        is_reasoning: false
-        priority: 1
+      # - id: "qwen/qwen3-coder:free"
+      #   context_window: 262144
+      #   description: "Qwen3 Coder 480B MoE (2025). Best free coding-specialised model on OpenRouter. Large 262K context; strong SWE-Bench scores."
+      #   tags: [coding, agentic, moe, large_context]
+      #   is_reasoning: false
+      #   priority: 1
 
       # BALANCED — general-purpose flagship
-      - id: "openai/gpt-oss-120b:free"
-        context_window: 131072
-        description: "OpenAI open-weights 120B (Dec 2025) via OpenRouter. Strong general-purpose capability when other providers are rate-limited."
-        tags: [coding, agentic]
-        is_reasoning: false
-        priority: 2
+      # - id: "openai/gpt-oss-120b:free"
+      #   context_window: 131072
+      #   description: "OpenAI open-weights 120B (Dec 2025) via OpenRouter. Strong general-purpose capability when other providers are rate-limited."
+      #   tags: [coding, agentic]
+      #   is_reasoning: false
+      #   priority: 2
 
       # LARGE CONTEXT — 262K context + reasoning + RAG specialist
       - id: "nvidia/nemotron-3-super-120b-a12b:free"
@@ -189,7 +181,7 @@ providers:
         description: "NVIDIA Nemotron Super 120B MoE (2024). 262K context; hybrid Mamba-Transformer; excellent for RAG, summarisation, and long-document agentic tasks."
         tags: [agentic, large_context, moe, reasoning]
         is_reasoning: false
-        priority: 3
+        priority: 1
 
       # AUTO — OpenRouter's smart free-model router; no quota overhead
       - id: "openrouter/free"
@@ -197,7 +189,7 @@ providers:
         description: "OpenRouter free auto-router (always latest). Automatically selects the best currently-available free model. Use as fallback when specific models are down."
         tags: [agentic]
         is_reasoning: false
-        priority: 4
+        priority: 2
 
   # --------------------------------------------------------------------------
   # NVIDIA Build (NIM) — credit-based free tier (1,000 credits at signup)
@@ -220,21 +212,6 @@ providers:
         is_reasoning: false
         priority: 1
 
-      # BALANCED — latest Mistral Small 4 (released same day as this config)
-      - id: "mistral-ai/mistral-small-4-119b-2603"
-        context_window: 256000
-        description: "Mistral Small 4 (Mar 16 2026). 119B hybrid MoE; 256K context; multimodal; unifies reasoning + coding + vision in one model. Available free via NIM credits."
-        tags: [coding, multimodal, large_context, moe, agentic]
-        is_reasoning: false
-        priority: 2
-
-      # REASONING — DeepSeek R1 for deep reasoning tasks
-      - id: "deepseek-ai/deepseek-r1"
-        context_window: 131072
-        description: "DeepSeek R1 (Jan 2025). 671B MoE (37B active); o1-level chain-of-thought reasoning; open weights MIT license. Use for hard math, logic, complex coding."
-        tags: [reasoning, moe]
-        is_reasoning: true
-        priority: 3
 
   # --------------------------------------------------------------------------
   # SambaNova Cloud — fast inference; restrictive free tier
@@ -260,12 +237,12 @@ providers:
         priority: 1
 
       # BALANCED — strong general flagship with tool calling
-      - id: "DeepSeek-V3.1"
-        context_window: 131072
-        description: "DeepSeek V3.1 (Jan 2025). 685B MoE flagship chat model. Strong coding and instruction following; tool calling supported."
-        tags: [coding, agentic, moe]
-        is_reasoning: false
-        priority: 2
+      # - id: "DeepSeek-V3.1"
+      #   context_window: 131072
+      #   description: "DeepSeek V3.1 (Jan 2025). 685B MoE flagship chat model. Strong coding and instruction following; tool calling supported."
+      #   tags: [coding, agentic, moe]
+      #   is_reasoning: false
+      #   priority: 2
 
       # FAST — reliable workhorse for when R1/V3 quotas are exhausted
       - id: "Meta-Llama-3.3-70B-Instruct"
@@ -273,7 +250,7 @@ providers:
         description: "Llama 3.3 70B (Dec 2024). Reliable workhorse with tool calling. Use when R1/V3 daily limits are exhausted and a capable fallback is needed."
         tags: [agentic]
         is_reasoning: false
-        priority: 3
+        priority: 2
 
   # --------------------------------------------------------------------------
   # Mistral AI — free Experiment plan
@@ -299,9 +276,9 @@ providers:
         priority: 1
 
       # BALANCED — large frontier model on the Experiment plan
-      - id: "mistral-large-2412"
+      - id: "mistral-large-2512"
         context_window: 131072
-        description: "Mistral Large 3 (Dec 2025). 675B model; most capable Mistral on free tier. Strong reasoning and multilingual support."
+        description: "Mistral Large 2 (Dec 2025). 675B model; most capable Mistral on free tier. Strong reasoning and multilingual support."
         tags: [reasoning, multilingual]
         is_reasoning: false
         priority: 2
@@ -319,7 +296,7 @@ providers:
 # ---------------------------------------------------------------------------
 local:
   ollama:
-    base_url: "http://ollama:11434"
+    base_url: "http://host.docker.internal:11434"
     router_model: "gpt-oss:20b"
     fallback_model: "gpt-oss:20b"
     fallback_enabled: true
@@ -334,3 +311,4 @@ proxy:
   output_token_reserve: 4096
   memory_warning_threshold: 0.80
   memory_critical_threshold: 0.90
+  local_only_threshold: "simple"  # disabled | simple | moderate | always

@@ -1,5 +1,5 @@
 """
-FreeClaw – router.py
+FreeClawRouter – router.py
 Hybrid two-tier routing engine.
 
 Tier 1 — Fast Heuristics:
@@ -43,6 +43,7 @@ Agentic routing constraint (PRD §2.3):
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -392,6 +393,8 @@ def _build_routing_prompt(
     input_tokens: int,
     complexity: str,
     recommended_idx: int,
+    local_model: str = "",
+    adaptive_mode: bool = False,
 ) -> str:
     """
     Build a structured, self-contained routing prompt that encodes all
@@ -400,6 +403,16 @@ def _build_routing_prompt(
     The LLM does NOT need to invent strategy — it only needs to apply the
     rules and confirm (or justify overriding) the Python recommendation.
     Security: contains ONLY scheduling metadata — no API keys, no user content.
+
+    Parameters
+    ----------
+    adaptive_mode:
+        When True, append "Local Ollama" as the final option and inject
+        RULE 0 (adaptive conservation) before the other rules.  The LLM
+        may choose the local option when cloud budgets are running low and
+        the task is simple enough to handle locally.
+    local_model:
+        Ollama model name to display when adaptive_mode=True.
     """
 
     # ----- Capability sheet -----
@@ -442,11 +455,39 @@ def _build_routing_prompt(
         ]
         candidate_lines.append("\n".join(lines))
 
+    # Append local Ollama as the final option in adaptive mode
+    local_option_num = len(candidates) + 1
+    if adaptive_mode and local_model:
+        local_lines = [
+            f"Option {local_option_num}: Local Ollama / {local_model}",
+            f"  Description      : Local model running on your own hardware — zero API cost",
+            f"  Capabilities     : fast",
+            f"  Scheduling score : N/A  (conserves all cloud budgets)",
+            f"  Daily budget     : ✓ unlimited  (local compute — no quota)",
+            f"  Context window   : 128K tokens",
+        ]
+        candidate_lines.append("\n".join(local_lines))
+
     candidates_block = "\n\n".join(candidate_lines)
+
+    # ----- RULE 0 block (adaptive mode only) -----
+    rule0_block = ""
+    if adaptive_mode:
+        rule0_block = f"""\
+RULE 0 — ADAPTIVE CONSERVATION (apply BEFORE all other rules):
+  If the task complexity is "simple" AND all cloud options show daily budget
+  status of "caution" or "low", choose Option {local_option_num} (Local Ollama)
+  to preserve cloud credits for complex tasks that truly need advanced
+  cloud-model capability.
+  Analogy: route cheap jobs to the idle local processor rather than burning
+  shared-network quota that cannot be recovered until midnight UTC.
+  Do NOT apply this rule if any cloud option still has a "healthy" daily budget.
+
+"""
 
     # ----- Full prompt -----
     prompt = f"""\
-You are the routing controller for FreeClaw, a zero-cost LLM proxy.
+You are the routing controller for FreeClawRouter, a zero-cost LLM proxy.
 Your job: choose which API endpoint handles this request.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -467,7 +508,7 @@ MODEL CAPABILITY REFERENCE
 SCHEDULING RULES — apply in this exact order
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-RULE 1 — HARD BLOCK:
+{rule0_block}RULE 1 — HARD BLOCK:
   Never choose an option marked PROTECTED RESERVE (daily budget <10%) unless
   it is the ONLY remaining option. Exhausting daily quotas leaves the agent
   unable to run for the rest of the day.
@@ -524,6 +565,8 @@ async def _ask_ollama_router(
     router_model: str,
     recommended_idx: int,
     timeout: float = 15.0,
+    local_model: str = "",
+    adaptive_mode: bool = False,
 ) -> int:
     """
     Send the structured routing prompt to the local Ollama model and parse
@@ -532,8 +575,21 @@ async def _ask_ollama_router(
 
     Security: the prompt contains ONLY scheduling metadata — no API keys,
     no user message content, no provider authentication data.
+
+    Returns
+    -------
+    int
+        Index into `candidates` for the chosen cloud provider, OR
+        `len(candidates)` as a sentinel meaning "route to local Ollama"
+        (only possible when adaptive_mode=True).
     """
-    prompt = _build_routing_prompt(candidates, input_tokens, complexity, recommended_idx)
+    prompt = _build_routing_prompt(
+        candidates, input_tokens, complexity, recommended_idx,
+        local_model=local_model, adaptive_mode=adaptive_mode,
+    )
+
+    # Total options presented = cloud candidates + (1 if adaptive_mode else 0)
+    total_options = len(candidates) + (1 if adaptive_mode and local_model else 0)
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -545,7 +601,7 @@ async def _ask_ollama_router(
                     "stream": False,
                     "options": {
                         "temperature": 0,      # deterministic — no creativity needed
-                        "num_predict": 8,      # only needs to output a single digit
+                        "num_predict": 12,     # enough for a 2-digit number + whitespace
                         "top_k": 1,
                     },
                 },
@@ -553,14 +609,21 @@ async def _ask_ollama_router(
             resp.raise_for_status()
             text = resp.json().get("response", "").strip()
 
-            # Extract the first integer from the response
-            for ch in text:
-                if ch.isdigit():
-                    idx = int(ch) - 1
-                    if 0 <= idx < len(candidates):
-                        logger.debug("Ollama router chose option %d: %s", idx + 1, text[:60])
-                        return idx
-                    break
+            # Extract the first integer from the response (handles multi-digit numbers)
+            m = re.search(r"\d+", text)
+            if m:
+                chosen_num = int(m.group())
+                chosen_idx = chosen_num - 1  # convert 1-based to 0-based
+                if 0 <= chosen_idx < len(candidates):
+                    logger.debug("Ollama router chose option %d (cloud): %s", chosen_num, text[:60])
+                    return chosen_idx
+                if adaptive_mode and chosen_idx == len(candidates):
+                    # LLM chose the local Ollama option
+                    logger.info(
+                        "Ollama router chose local fallback (option %d, adaptive conservation)",
+                        chosen_num,
+                    )
+                    return len(candidates)  # sentinel: route to local
             logger.warning("Ollama router returned unparseable response: %r", text[:60])
 
     except Exception as exc:
@@ -581,12 +644,27 @@ class HybridRouter:
         self._config = config
         self._registry = registry
 
-    async def route(self, payload: dict[str, Any]) -> RouteDecision:
+    async def route(
+        self,
+        payload: dict[str, Any],
+        failed_providers: set[str] | None = None,
+    ) -> RouteDecision:
         """
         Determine the best (provider, model) to serve this request.
 
+        Parameters
+        ----------
+        payload:
+            The original /v1/chat/completions request body.
+        failed_providers:
+            Optional set of provider names that have already failed for this
+            request (used by the retry loop in proxy.py).  These are excluded
+            from Tier 1 filtering so the router can pick a fresh candidate.
+
         Pipeline:
-          1. Tier 1 — hard filter (rate limits, context window)
+          0. Local-only threshold check — short-circuit to local fallback when
+             the task complexity is within the configured threshold
+          1. Tier 1 — hard filter (rate limits, context window, failed providers)
           2. Tier 2 — scheduling score (Python) + LLM confirmation (Ollama)
           3. Fallback — local Ollama if all cloud providers are exhausted
         """
@@ -595,10 +673,32 @@ class HybridRouter:
         output_reserve = cfg.proxy.output_token_reserve
         complexity = _estimate_complexity(payload)
 
+        # ----- Pre-Tier-1: Local-only threshold -----
+        threshold = cfg.proxy.local_only_threshold
+        if (
+            threshold == "always"
+            or (threshold == "simple" and complexity == "simple")
+            or (threshold == "moderate" and complexity in ("simple", "moderate"))
+        ):
+            logger.info(
+                "Local-only threshold '%s' matched complexity '%s' — routing to local fallback",
+                threshold, complexity,
+            )
+            return self._local_fallback(input_tokens)
+
         # ----- Tier 1: Hard heuristic filter -----
         raw_candidates: list[CandidateInfo] = []
+        _failed = failed_providers or set()
 
         for provider, model in cfg.all_provider_models():
+            # Skip providers that already failed for this request
+            if provider.name in _failed:
+                logger.debug(
+                    "Skip %s/%s: already failed for this request",
+                    provider.name, model.id,
+                )
+                continue
+
             # Context window must accommodate prompt + output reserve
             required = input_tokens + output_reserve
             if model.context_window < required:
@@ -656,6 +756,14 @@ class HybridRouter:
         raw_candidates.sort(key=lambda c: c.score, reverse=True)
         recommended_idx = 0  # best Python score
 
+        # When threshold == "disabled", let the local LLM router adaptively
+        # decide whether to route to local Ollama (RULE 0 in the prompt).
+        adaptive_mode = (
+            threshold == "disabled"
+            and cfg.local.fallback_enabled
+            and len(raw_candidates) >= 2
+        )
+
         idx = await _ask_ollama_router(
             candidates=raw_candidates,
             input_tokens=input_tokens,
@@ -663,7 +771,13 @@ class HybridRouter:
             ollama_base_url=cfg.local.base_url,
             router_model=cfg.local.router_model,
             recommended_idx=recommended_idx,
+            local_model=cfg.local.fallback_model if adaptive_mode else "",
+            adaptive_mode=adaptive_mode,
         )
+
+        # Sentinel: LLM chose local Ollama (adaptive conservation)
+        if idx == len(raw_candidates):
+            return self._local_fallback(input_tokens)
 
         chosen = raw_candidates[idx]
         logger.info(

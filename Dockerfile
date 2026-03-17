@@ -20,13 +20,13 @@ COPY config.yaml .
 # Users should volume-mount their config.local.yaml at runtime instead.
 
 # Non-root user for security
-RUN adduser --disabled-password --gecos "" freeclaw && \
+RUN adduser --disabled-password --gecos "" freeclawrouter && \
     mkdir -p /app/data && \
-    chown -R freeclaw:freeclaw /app/data
+    chown -R freeclawrouter:freeclawrouter /app/data
 
-USER freeclaw
+USER freeclawrouter
 
-ENV FREECLAW_CONFIG_DIR=/app
+ENV FREECLAWROUTER_CONFIG_DIR=/app
 ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8765

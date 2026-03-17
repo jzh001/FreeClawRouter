@@ -1,12 +1,23 @@
-# FreeClaw
+# FreeClawRouter
 
-**FreeClaw** is a zero-cost, self-hosted reverse proxy that lets you run **OpenClaw** (or any OpenAI-compatible agent) entirely on free-tier LLM APIs — with automatic failover to a local Ollama model when all cloud quotas are exhausted.
+**FreeClawRouter** is a zero-cost, self-hosted reverse proxy that lets you run **OpenClaw** (or any OpenAI-compatible agent) entirely on free-tier LLM APIs — with automatic failover to a local Ollama model when all cloud quotas are exhausted.
 
 ```
-OpenClaw → FreeClaw (port 8765) → [ Cerebras / Groq / Gemini / OpenRouter / NVIDIA / SambaNova / Mistral ]
+OpenClaw → FreeClawRouter (port 8765) → [ Cerebras / Groq / Gemini / OpenRouter / NVIDIA / SambaNova / Mistral ]
                                                    ↓ (all limits hit)
                                              Local Ollama (gpt-oss:20b)
 ```
+
+---
+
+## Features
+
+- **Smart routing** — hybrid two-tier engine combines deterministic scheduling scores with local LLM confirmation to pick the best provider for each request
+- **Error rerouting** — on a retryable failure (429, 5xx, connection error) the failed provider is automatically skipped and the next best option is tried, transparently, before any bytes reach the client
+- **Local-first threshold** — configurable `local_only_threshold` option routes simple or all tasks directly to your local Ollama model without consuming cloud credits; adjustable without a restart via the dashboard Settings tab
+- **Provider health tracking** — each provider's status (active / rate limited / error / idle) is derived from request outcomes in real time — zero extra API calls — and shown as colour-coded dots on the dashboard
+- **Background conversation summarization** — long conversations are automatically summarized by the local Ollama model in the background (off the critical path) so old turns are compressed rather than silently dropped when the context window fills
+- **Zero-cost operation** — combines free-tier quotas from Cerebras, Groq, Gemini, OpenRouter, NVIDIA, SambaNova, and Mistral, with local Ollama as the final fallback
 
 ---
 
@@ -31,8 +42,8 @@ ollama pull gpt-oss:20b
 ### 2. Clone this repository
 
 ```bash
-git clone https://github.com/your-username/freeclaw.git
-cd freeclaw
+git clone https://github.com/your-username/freeclawrouter.git
+cd freeclawrouter
 ```
 
 ### 3. Create your `.env` file with free-tier API keys
@@ -55,7 +66,7 @@ SAMBANOVA_API_KEY=       # https://cloud.sambanova.ai  — 200K tokens/day free
 MISTRAL_API_KEY=         # https://console.mistral.ai  — ~500K TPM free
 ```
 
-Leave unused keys blank — FreeClaw automatically skips providers without a key.
+Leave unused keys blank — FreeClawRouter automatically skips providers without a key.
 
 ### 4. (Optional) Configure OpenClaw
 
@@ -71,14 +82,14 @@ Create `openclaw_config/openclaw.json` (JSON5 format):
 {
   "models": {
     "providers": {
-      "freeclaw": {
-        "baseUrl": "http://freeclaw:8765/v1",
-        "apiKey": "freeclaw-local-key",
+      "freeclawrouter": {
+        "baseUrl": "http://freeclawrouter:8765/v1",
+        "apiKey": "freeclawrouter-local-key",
         "api": "openai-completions",
         "models": [
           {
-            "id": "freeclaw-auto",
-            "name": "FreeClaw Auto-Router",
+            "id": "freeclawrouter-auto",
+            "name": "FreeClawRouter Auto-Router",
             "contextWindow": 131072,
             "maxTokens": 4096,
             "cost": { "input": 0, "output": 0 }
@@ -89,7 +100,9 @@ Create `openclaw_config/openclaw.json` (JSON5 format):
   },
   "agents": {
     "defaults": {
-      "models": ["freeclaw/freeclaw-auto"]
+      "models": {
+        "freeclawrouter/freeclawrouter-auto": {}
+      }
     }
   }
 }
@@ -101,7 +114,7 @@ Create `openclaw_config/openclaw.json` (JSON5 format):
 docker compose up --build
 ```
 
-FreeClaw is now listening on **http://localhost:8765**.
+FreeClawRouter is now listening on **http://localhost:8765**.
 
 To run in the background:
 
@@ -124,6 +137,112 @@ curl http://localhost:8765/stats
 
 ---
 
+## Chatting with OpenClaw via Messaging Apps
+
+OpenClaw has a built-in gateway that connects it to 25+ messaging apps including
+WhatsApp and Telegram. When running via Docker Compose, the OpenClaw container
+already has the gateway built in.
+
+**How the config works:**
+The file `openclaw_config/openclaw.json` in this directory is bind-mounted into
+the OpenClaw container at `/home/node/.openclaw/openclaw.json`. You can edit it
+directly on the host — no need to enter the container. Alternatively, use the
+**[Channels tab](http://localhost:8765/dashboard)** in the FreeClawRouter dashboard
+for a guided UI.
+
+After editing the config, restart OpenClaw to pick up changes:
+
+```bash
+docker compose restart openclaw
+```
+
+---
+
+### Option A — Dashboard (recommended)
+
+Open the **Channels** tab at [http://localhost:8765/dashboard](http://localhost:8765/dashboard).
+Fill in your bot token and access policy, click **Save**, then follow the
+pairing instructions shown on the page.
+
+---
+
+### Option B — Manual config
+
+Edit `openclaw_config/openclaw.json` directly on the host:
+
+```jsonc
+{
+  // ... existing models/agents config ...
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "botToken": "123456789:ABCdef...",   // from @BotFather
+      "dmPolicy": "pairing",               // pairing | allowlist | open | disabled
+      "allowFrom": [],                     // numeric Telegram user IDs (allowlist mode)
+      "groupPolicy": "disabled"
+    },
+    "whatsapp": {
+      "dmPolicy": "pairing",               // pairing | allowlist | open | disabled
+      "allowFrom": [],                     // E.164 phone numbers (allowlist mode)
+      "groupPolicy": "disabled"
+    }
+  }
+}
+```
+
+Then restart: `docker compose restart openclaw`
+
+---
+
+### Telegram setup
+
+**1. Create a bot** — send `/newbot` to [@BotFather](https://t.me/BotFather) and
+copy the token it gives you.
+
+**2. Configure** — add the token via the dashboard Channels tab, or edit
+`openclaw_config/openclaw.json` manually (see above). Restart OpenClaw.
+
+**3. Pair** — send any message to your bot. It replies with an 8-character pairing
+code. Approve it:
+
+```bash
+docker exec freeclawrouter_openclaw openclaw pairing list telegram
+docker exec freeclawrouter_openclaw openclaw pairing approve telegram <CODE>
+```
+
+**Lock down to yourself** — find your numeric user ID via [@userinfobot](https://t.me/userinfobot),
+set `"dmPolicy": "allowlist"` and add it to `"allowFrom"`.
+
+---
+
+### WhatsApp setup
+
+WhatsApp uses the Baileys (WhatsApp Web) protocol. Use a **dedicated phone number**
+rather than your primary WhatsApp.
+
+**1. Scan QR code** — run this and scan the QR code from WhatsApp on your phone
+(**Linked Devices → Link a Device**):
+
+```bash
+docker exec -it freeclawrouter_openclaw openclaw channels login --channel whatsapp
+```
+
+**2. Configure** — set your access policy in `openclaw_config/openclaw.json` (or
+via the dashboard). Restart OpenClaw.
+
+**3. Pair** — send any message from your phone to the linked number. Approve the
+pairing code:
+
+```bash
+docker exec freeclawrouter_openclaw openclaw pairing list whatsapp
+docker exec freeclawrouter_openclaw openclaw pairing approve whatsapp <CODE>
+```
+
+**Lock down to yourself** — set `"dmPolicy": "allowlist"` and add your phone number
+in E.164 format (e.g. `"+15551234567"`) to `"allowFrom"`.
+
+---
+
 ## Switching the Local Model
 
 Change the `router_model` and `fallback_model` in `config.yaml` to any model you have pulled in Ollama:
@@ -131,11 +250,11 @@ Change the `router_model` and `fallback_model` in `config.yaml` to any model you
 ```yaml
 local:
   ollama:
-    router_model: "qwen3.5:27b"    # Use a larger model for routing decisions
-    fallback_model: "qwen3.5:27b"  # Use a larger model for generation
+    router_model: "llama3.3:70b"   # Use a larger model for routing decisions
+    fallback_model: "llama3.3:70b" # Use a larger model for generation
 ```
 
-Then restart: `docker compose restart freeclaw`.
+Then restart: `docker compose restart freeclawrouter`.
 
 You can see all locally available models with `ollama list`.
 
@@ -147,18 +266,18 @@ You can see all locally available models with `ollama list`.
 # All containers
 docker compose logs -f
 
-# FreeClaw only (routing decisions, rate-limit warnings, OOM alerts)
-docker compose logs -f freeclaw
+# FreeClawRouter only (routing decisions, rate-limit warnings, OOM alerts)
+docker compose logs -f freeclawrouter
 ```
 
-When all free-tier API limits are exhausted, FreeClaw prints a prominent warning
+When all free-tier API limits are exhausted, FreeClawRouter prints a prominent warning
 in the logs before routing to local Ollama.
 
 ---
 
 ## Dashboard
 
-FreeClaw includes a live web dashboard that shows API usage, token consumption,
+FreeClawRouter includes a live web dashboard that shows API usage, token consumption,
 provider health, and historical time-series charts.
 
 **Access it at:** [http://localhost:8765/dashboard](http://localhost:8765/dashboard)
@@ -168,14 +287,15 @@ The dashboard auto-refreshes every 10 seconds and shows:
 | Panel | What it shows |
 |---|---|
 | **Today's totals** | Total requests, tokens, errors, and local fallbacks since UTC midnight |
-| **Provider status cards** | Per-provider: requests today, tokens today, live RPM/RPD headroom, colour-coded health dot |
+| **Provider status cards** | Per-provider: real-time health status dot (active/rate-limited/error/idle), requests, tokens, RPM/RPD headroom |
 | **Requests today (bar)** | Breakdown of today's requests by provider |
 | **Tokens today (bar)** | Token consumption by provider |
 | **Last 24 h (line)** | Hourly request volume per provider — see traffic patterns over time |
 | **Last 7 days (bar)** | Daily request volume stacked by provider |
+| **Settings tab** | Configure the local AI routing preference — choose when to use local Ollama instead of cloud APIs, without a restart |
 
-Usage data is stored in a persistent SQLite database (`data/freeclaw.db` inside
-the Docker volume `freeclaw_data`). It survives container restarts and keeps a
+Usage data is stored in a persistent SQLite database (`data/freeclawrouter.db` inside
+the Docker volume `freeclawrouter_data`). It survives container restarts and keeps a
 full history for trend analysis.
 
 To access the dashboard from a remote machine or another container:
@@ -190,7 +310,9 @@ http://<host-ip>:8765/dashboard
 | Endpoint | Description |
 |---|---|
 | `GET /dashboard` | Live usage dashboard (web UI) |
-| `GET /api/dashboard-data` | Dashboard data as JSON (for scripting/monitoring) |
+| `GET /api/dashboard-data` | Dashboard data as JSON (providers, health, charts) |
+| `GET /api/settings` | Read current runtime settings (e.g. local_only_threshold) |
+| `POST /api/settings` | Update runtime settings (persisted, no restart needed) |
 | `POST /v1/chat/completions` | Main proxy endpoint (OpenAI-compatible) |
 | `GET /v1/models` | List all configured models |
 | `GET /health` | Liveness probe |
@@ -223,7 +345,7 @@ http://<host-ip>:8765/dashboard
 
 ## Troubleshooting
 
-**FreeClaw says "no route" / returns 503**
+**FreeClawRouter says "no route" / returns 503**
 All API keys may be exhausted for the day and `fallback_enabled` is `false` in
 `config.yaml`. Either wait for daily limits to reset, add more API keys, or
 set `fallback_enabled: true`.

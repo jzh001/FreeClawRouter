@@ -1,12 +1,12 @@
 """
-FreeClaw – storage.py
+FreeClawRouter – storage.py
 SQLite-backed persistent usage log.
 
 Every proxied request is written as a row in `requests`. The dashboard and
 /stats endpoint query this table for time-series and aggregate data.
 
-The database file location is controlled by the FREECLAW_DATA_DIR environment
-variable (default: ./data/freeclaw.db).
+The database file location is controlled by the FREECLAWROUTER_DATA_DIR environment
+variable (default: ./data/freeclawrouter.db).
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ _lock = threading.Lock()
 def _db_path() -> Path:
     global _DB_PATH
     if _DB_PATH is None:
-        data_dir = Path(os.environ.get("FREECLAW_DATA_DIR", "data"))
+        data_dir = Path(os.environ.get("FREECLAWROUTER_DATA_DIR", "data"))
         data_dir.mkdir(parents=True, exist_ok=True)
-        _DB_PATH = data_dir / "freeclaw.db"
+        _DB_PATH = data_dir / "freeclawrouter.db"
     return _DB_PATH
 
 

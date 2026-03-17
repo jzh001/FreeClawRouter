@@ -1,5 +1,5 @@
 """
-FreeClaw – rate_limiter.py
+FreeClawRouter – rate_limiter.py
 Thread-safe, in-memory sliding-window rate limiter.
 
 Tracks:

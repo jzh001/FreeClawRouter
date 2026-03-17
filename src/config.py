@@ -1,5 +1,5 @@
 """
-FreeClaw – config.py
+FreeClawRouter – config.py
 Loads and validates config.yaml (with optional config.local.yaml overlay).
 Environment variables are substituted for ${VAR_NAME} placeholders in api_key fields.
 """
@@ -80,6 +80,7 @@ class ProxyConfig:
     output_token_reserve: int = 4096
     memory_warning_threshold: float = 0.80
     memory_critical_threshold: float = 0.90
+    local_only_threshold: str = "simple"  # disabled | simple | moderate | always
 
 
 @dataclass
@@ -199,6 +200,7 @@ def load_config(config_dir: str | Path = ".") -> AppConfig:
         output_token_reserve=proxy_raw.get("output_token_reserve", 4096),
         memory_warning_threshold=proxy_raw.get("memory_warning_threshold", 0.80),
         memory_critical_threshold=proxy_raw.get("memory_critical_threshold", 0.90),
+        local_only_threshold=proxy_raw.get("local_only_threshold", "simple"),
     )
 
     return AppConfig(providers=providers, local=local, proxy=proxy)

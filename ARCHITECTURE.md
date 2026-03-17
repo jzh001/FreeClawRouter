@@ -1,8 +1,8 @@
-# FreeClaw — Architecture Reference
+# FreeClawRouter — Architecture Reference
 
 ## 1. Overview
 
-FreeClaw is a **standalone OpenAI-compatible reverse proxy**. It sits between OpenClaw (or any
+FreeClawRouter is a **standalone OpenAI-compatible reverse proxy**. It sits between OpenClaw (or any
 OpenAI-compatible client) and the actual LLM inference endpoints. OpenClaw is never modified;
 it simply has its `baseUrl` pointed at `http://localhost:8765/v1`.
 
@@ -12,7 +12,7 @@ it simply has its `baseUrl` pointed at `http://localhost:8765/v1`.
 │                                                                  │
 │  ┌─────────┐    POST /v1/chat/completions    ┌────────────────┐  │
 │  │         │ ───────────────────────────────▶│                │  │
-│  │OpenClaw │                                 │   FreeClaw     │  │
+│  │OpenClaw │                                 │   FreeClawRouter     │  │
 │  │ Agent   │ ◀───────────────────────────────│   Proxy        │  │
 │  │         │      SSE stream / JSON           │   :8765        │  │
 │  └─────────┘                                 └───────┬────────┘  │
@@ -31,7 +31,7 @@ it simply has its `baseUrl` pointed at `http://localhost:8765/v1`.
 
 ## 2. Reverse Proxy Abstraction
 
-FreeClaw exposes the same interface as the OpenAI API:
+FreeClawRouter exposes the same interface as the OpenAI API:
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -42,11 +42,11 @@ FreeClaw exposes the same interface as the OpenAI API:
 
 The proxy is **model-transparent**: the `model` field in the outgoing request is
 replaced with the upstream provider's actual model ID before forwarding. The client
-always sees the virtual model ID (e.g. `freeclaw-auto`).
+always sees the virtual model ID (e.g. `freeclawrouter-auto`).
 
 ### Streaming (SSE)
 
-OpenClaw sends `"stream": true` on every request. FreeClaw handles this with
+OpenClaw sends `"stream": true` on every request. FreeClawRouter handles this with
 `httpx.AsyncClient.stream()` and forwards raw SSE bytes chunk-by-chunk to the
 client via FastAPI's `StreamingResponse`. There is no buffering of the full
 response — latency from the upstream is preserved.
@@ -60,9 +60,21 @@ Incoming request
       │
       ▼
 ┌─────────────────────────────────────────────────────┐
+│  Pre-Tier-1: local_only_threshold check             │
+│                                                     │
+│  If threshold == "always"                           │
+│  OR threshold == "simple"  AND complexity == simple │
+│  OR threshold == "moderate" AND complexity in       │
+│                               (simple, moderate)    │
+│    → return local fallback immediately              │
+└──────────────────┬──────────────────────────────────┘
+                   │ (threshold did not match)
+                   ▼
+┌─────────────────────────────────────────────────────┐
 │  Tier 1: Hard Heuristic Filter                      │
 │                                                     │
 │  For each (provider, model) pair:                   │
+│    ✗ Skip if in failed_providers set (retry loop)   │
 │    ✗ Skip if API key not configured                 │
 │    ✗ Skip if context_window < input_tokens + 4096   │
 │    ✗ Skip if rate limits exhausted (RPM/RPD/TPM/TPD)│
@@ -146,17 +158,64 @@ can exceed the context window of free-tier models (some as low as 8K).
 counter, with a `chars/4` approximation as a fallback. The `count_request_tokens`
 function accounts for the messages array, tool schemas, and per-message overhead.
 
-### Truncation Strategy (in order of preference)
+### Background Conversation Summarization
+
+Rather than silently dropping old messages, FreeClawRouter proactively
+summarizes them in the background using the local Ollama model.
 
 ```
-1. Drop oldest non-system messages from the front of the conversation
-   (preserves system prompt + recent turns)
-
-2. If still over limit: truncate the content of the oldest remaining
-   non-system message
-
-3. Last resort: truncate the system prompt itself (logged as a warning)
+After each successful request
+        │
+        ▼
+maybe_schedule_summary()
+  Is conversation > 60% of context window?
+    No  → nothing to do
+    Yes → split: [old turns] + [last 6 turns to keep]
+          Is old_turns already cached?
+            Yes → nothing to do
+            No  → asyncio.create_task(_run_summary(old_turns))
+                  ← returns immediately, never blocks request
+                        │
+                        ▼ (background, seconds later)
+                  Ollama summarize call
+                  Cache: message_hash → summary_text (max 256 entries)
 ```
+
+The summary is injected on the **next** request that needs truncation:
+
+```
+fit_messages_to_context() called
+        │
+        ▼
+  Step 0: summarizer.get_summary(old_msgs)
+    Hit  → inject synthetic system message
+           "[Earlier conversation — compressed]\n\n{summary}"
+           + keep last 6 turns verbatim  →  usually fits, done
+    Miss → fall through to drop strategy (same as before)
+    (background task was already scheduled to warm the cache)
+        │
+        ▼
+  Step 1: Drop oldest non-system messages (existing behaviour)
+  Step 2: Truncate oldest remaining message content
+  Step 3: Truncate system prompt (last resort, logged as warning)
+```
+
+Key properties:
+- **Off the critical path**: the Ollama summarization call is always in a
+  background task. Request latency is never affected.
+- **Lossless when warm**: once the cache is primed (typically after the first
+  long request), subsequent truncations replace dropped turns with a summary
+  rather than discarding them silently.
+- **Graceful degradation**: cache miss → falls back to the existing drop
+  strategy transparently, no error surfaced to the client.
+
+### Tuning Constants
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `SUMMARY_TRIGGER_PCT` | 0.60 | Schedule summarization when prompt > 60% of context |
+| `RECENT_TURNS_TO_KEEP` | 6 | Always keep the last 6 non-system messages verbatim |
+| `ConversationSummarizer._MAX_CACHE` | 256 | Max cached summaries in memory |
 
 The effective context limit is `context_window - output_reserve` (default: 4096
 tokens reserved for the model's output).
@@ -204,7 +263,7 @@ Both thresholds are configurable in `config.yaml`.
 .env (host only)
     │
     ▼ (docker env injection)
-FreeClaw container
+FreeClawRouter container
     │
     ├── used in Authorization header when forwarding to cloud APIs
     └── NEVER included in:
@@ -222,7 +281,7 @@ The `openclaw` service in `docker-compose.yml` enforces:
 - `cap_drop: ALL` — all Linux capabilities dropped
 - `no-new-privileges: true` — no privilege escalation
 
-OpenClaw cannot access the host filesystem, the FreeClaw `.env` file, or any
+OpenClaw cannot access the host filesystem, the FreeClawRouter `.env` file, or any
 other container's secrets.
 
 ---
@@ -232,26 +291,85 @@ other container's secrets.
 OpenClaw uses multi-turn tool-calling loops where mid-stream model swaps would
 corrupt the JSON tool-call response structure and cause parser crashes (PRD §2.3).
 
-FreeClaw enforces this invariant by making **exactly one routing decision per
-incoming HTTP request**. The `RouteDecision` object is committed before the
-upstream request begins and is never changed mid-stream. If an upstream returns
-an error mid-stream, FreeClaw emits an SSE error frame and closes the stream;
-it does **not** attempt to restart the generation on a different provider.
+FreeClawRouter enforces this invariant with the following guarantee: **retries
+only happen before the first data byte is sent to the client**. The
+`_try_start_stream()` method in `proxy.py` probes the upstream connection and
+checks the HTTP status before committing to stream — if the status is retryable
+(429/5xx) it raises `_RetryableError` and the proxy selects a fresh provider
+transparently. Once streaming has started (first `yield`), no mid-stream retry
+is attempted; if an error occurs partway through a stream, an SSE error frame is
+emitted and the stream is closed.
+
+For non-streaming requests, the retry loop in `handle_chat_completions` retries
+up to `len(providers) + 2` times, adding each failed provider to
+`failed_providers` so the router can skip it on the next attempt.
 
 ---
 
-## 9. File Structure
+## 9. Error Recovery / Interrupt Handling
 
 ```
-freeclaw/
+Request arrives
+      │
+      ▼
+ Route → provider A
+      │
+      ├── Success (2xx)  → record_success(A), return to client
+      │
+      ├── Retryable (429/5xx/timeout, BEFORE first byte sent)
+      │     → record_rate_limit(A) or record_error(A)
+      │     → add A to failed_providers
+      │     → re-route (skip A) → provider B → …
+      │
+      └── Non-retryable 4xx (e.g. 400 Bad Request)
+            → return error to client immediately
+```
+
+Key properties:
+- **Zero client visibility**: retries are fully transparent — the client
+  never receives a partial response or an intermediate error frame.
+- **Max attempts**: `len(configured_providers) + 2` (covers all cloud
+  providers plus local fallback with one safety margin).
+- **Local as last resort**: if every cloud provider fails, the local
+  Ollama fallback is tried last.  If it also fails, HTTP 502 is returned.
+- **No mid-stream retry**: once bytes have been yielded to the client,
+  no retry is possible (agentic constraint, see §8 above).
+
+---
+
+## 10. Provider Health Tracking
+
+`health.py` maintains an in-memory status for each provider, updated
+synchronously on every request outcome — zero additional API calls.
+
+| Event | Status transition |
+|---|---|
+| `record_success(p)` | → `"active"` |
+| `record_rate_limit(p)` | → `"rate_limited"` |
+| `record_error(p, msg)` | consecutive_errors++; if ≥ 2 → `"error"` |
+| No event in 10 minutes | → `"idle"` (evaluated lazily at read time) |
+
+The `get_all()` method applies the idle-timeout rule at read time — there
+is no background task or timer. The dashboard reads health state via the
+`/api/dashboard-data` endpoint, which includes it in the `providers[name].health`
+field.
+
+---
+
+## 11. File Structure
+
+```
+freeclawrouter/
 ├── src/
 │   ├── __init__.py
-│   ├── main.py             # FastAPI app, lifespan, routes
+│   ├── main.py             # FastAPI app, lifespan, routes, settings API
 │   ├── config.py           # Config loading, data classes
 │   ├── rate_limiter.py     # Sliding-window + day-counter buckets
 │   ├── context_manager.py  # Token counting, message truncation
-│   ├── router.py           # HybridRouter (Tier 1 + Tier 2)
-│   └── proxy.py            # HTTP forwarding, SSE streaming, OOM guard
+│   ├── router.py           # HybridRouter (local threshold + Tier 1 + Tier 2)
+│   ├── proxy.py            # HTTP forwarding, retry loop, SSE streaming, OOM guard
+│   ├── health.py           # Provider health tracker (zero extra API calls)
+│   └── dashboard.py        # Web dashboard (Usage + Channels + Settings tabs)
 ├── config.yaml             # Default configuration (all providers)
 ├── config.local.yaml       # (git-ignored) Local overrides
 ├── .env                    # (git-ignored) API keys
@@ -260,5 +378,6 @@ freeclaw/
 ├── docker-compose.yml
 ├── requirements.txt
 ├── README.md
-└── ARCHITECTURE.md
+├── ARCHITECTURE.md
+└── INSTALL.md              # Step-by-step guide for non-technical users
 ```

@@ -1,90 +1,57 @@
 # ---------------------------------------------------------------------------
-# FreeClaw Docker Compose Stack
+# FreeClawRouter Docker Compose Stack
 #
 # Services:
-#   freeclaw  — the OpenAI-compatible reverse proxy (port 8765)
-#   ollama    — local LLM server for routing decisions + fallback generation
-#   openclaw  — the AI agent (configured to point at freeclaw)
+#   freeclawrouter  — the OpenAI-compatible reverse proxy (port 8765)
+#   openclaw        — the AI agent (configured to point at freeclawrouter)
+#
+# Ollama runs on the HOST machine (not in Docker) so that:
+#   • Models are shared — no duplicate storage
+#   • Apple Silicon gets native Metal GPU acceleration
+#   • Linux/Windows GPU drivers are available without Docker passthrough
+#
+# Before starting: install Ollama from https://ollama.com and run:
+#   ollama pull gpt-oss:20b
 #
 # Security (PRD §4):
 #   • openclaw runs as a non-root user with no host volume mounts
 #   • openclaw has no access to /etc, /home, /root, /var, etc.
 #   • openclaw is isolated on its own network segment
-#   • API keys are never exposed to openclaw or ollama containers
+#   • API keys are never exposed to openclaw containers
 # ---------------------------------------------------------------------------
 
 networks:
-  proxy_net:
-    driver: bridge
   agent_net:
     driver: bridge
-    # openclaw lives here; no direct internet, routes through freeclaw
-    internal: false   # openclaw needs outbound for web tools; freeclaw handles LLM traffic
+    # openclaw lives here; no direct internet, routes through freeclawrouter
+    internal: false   # openclaw needs outbound for web tools; freeclawrouter handles LLM traffic
 
 volumes:
-  ollama_data:
-    driver: local
-  freeclaw_data:
+  freeclawrouter_data:
     driver: local
 
 services:
 
   # --------------------------------------------------------------------------
-  # Ollama — local LLM server
+  # FreeClawRouter — reverse proxy
   # --------------------------------------------------------------------------
-  ollama:
-    image: ollama/ollama:latest
-    container_name: freeclaw_ollama
-    restart: unless-stopped
-    networks:
-      - proxy_net
-    volumes:
-      - ollama_data:/root/.ollama
-    # Expose on host only for debugging; comment out in production
-    ports:
-      # Changed to 11435 to avoid conflict with local Ollama instance
-      - "11435:11434"
-    # GPU support — uncomment the relevant block for your hardware:
-    #
-    # NVIDIA GPU:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-    #
-    # Apple Silicon (Metal) is handled natively by the Ollama binary;
-    # no extra Docker configuration is needed when running on macOS.
-    environment:
-      - OLLAMA_KEEP_ALIVE=24h
-    healthcheck:
-      test: "ollama list || exit 1"
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
-  # --------------------------------------------------------------------------
-  # FreeClaw — reverse proxy
-  # --------------------------------------------------------------------------
-  freeclaw:
+  freeclawrouter:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: freeclaw_proxy
+    container_name: freeclawrouter_proxy
     restart: unless-stopped
     networks:
-      - proxy_net
       - agent_net
     ports:
       - "8765:8765"
-    depends_on:
-      ollama:
-        condition: service_healthy
+    # host.docker.internal resolves to the host machine from inside Docker.
+    # On Linux this requires Docker 20.10+ or the extra_hosts entry below.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - FREECLAW_DATA_DIR=/app/data
+      - FREECLAWROUTER_DATA_DIR=/app/data
+      - OPENCLAW_CONFIG_DIR=/app/openclaw_config
     env_file:
       # Create a .env file in this directory with your API keys:
       #   CEREBRAS_API_KEY=...
@@ -98,7 +65,7 @@ services:
     volumes:
       # Persistent SQLite database for the dashboard (survives restarts)
       - type: volume
-        source: freeclaw_data
+        source: freeclawrouter_data
         target: /app/data
       # Mount a local config override if you want to customise without rebuilding
       - type: bind
@@ -110,6 +77,11 @@ services:
       #   source: ./config.local.yaml
       #   target: /app/config.local.yaml
       #   read_only: true
+      # OpenClaw config directory — writable so the Channels dashboard tab can save settings
+      - type: bind
+        source: ./openclaw_config
+        target: /app/openclaw_config
+        read_only: false
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 15s
@@ -123,12 +95,12 @@ services:
   # --------------------------------------------------------------------------
   openclaw:
     image: ghcr.io/openclaw/openclaw:latest
-    container_name: freeclaw_openclaw
+    container_name: freeclawrouter_openclaw
     restart: unless-stopped
     networks:
       - agent_net
     depends_on:
-      freeclaw:
+      freeclawrouter:
         condition: service_healthy
     # Security: read-only root filesystem; only explicitly defined volumes mounted
     read_only: true
@@ -144,11 +116,11 @@ services:
         target: /home/node/.openclaw
         read_only: false
     environment:
-      # Point OpenClaw at FreeClaw instead of real OpenAI
-      - OPENAI_BASE_URL=http://freeclaw:8765/v1
-      # A dummy key is required syntactically; FreeClaw ignores it and uses
+      # Point OpenClaw at FreeClawRouter instead of real OpenAI
+      - OPENAI_BASE_URL=http://freeclawrouter:8765/v1
+      # A dummy key is required syntactically; FreeClawRouter ignores it and uses
       # the real provider keys from its own .env
-      - OPENAI_API_KEY=freeclaw-local-key
+      - OPENAI_API_KEY=freeclawrouter-local-key
     # Drop all Linux capabilities for maximum isolation
     cap_drop:
       - ALL
