@@ -366,7 +366,7 @@ http://<host-ip>:8765/dashboard
 
 ## Hardware Notes
 
-- **Mac Mini M4 Pro / Apple Silicon**: Ollama uses Metal automatically — no extra config needed.
+- **M4 Apple Silicon**: Ollama uses Metal automatically — no extra config needed.
 - **NVIDIA GPU**: Uncomment the `deploy.resources` section in `docker-compose.yml`.
 - **CPU-only**: Works, but local fallback will be slower. Groq/Cerebras have the
   highest free daily quotas so local fallback should be rare.
