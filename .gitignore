@@ -1,0 +1,26 @@
+# Runtime data (SQLite dashboard database)
+data/
+
+# Secrets
+.env
+config.local.yaml
+
+# OpenClaw agent data (may contain sensitive conversation history)
+openclaw_config/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Docker
+.docker/
+
+# OS
+.DS_Store
+Thumbs.db

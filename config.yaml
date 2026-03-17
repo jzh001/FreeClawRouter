@@ -1,0 +1,336 @@
+# FreeClaw Configuration — last verified 2026-03-16
+# Copy this file to config.local.yaml for local overrides (git-ignored).
+# API keys are read from environment variables — never hardcode them here.
+#
+# Model selection philosophy:
+#   Each provider lists 2–3 models covering distinct tradeoffs:
+#     • Powerful  — largest/most capable model (best reasoning/coding)
+#     • Balanced  — best quality-per-token workhorse
+#     • Fast      — smallest/fastest model (high throughput, simple tasks)
+#
+# Model tags (used in the router's capability sheet):
+#   reasoning    — built-in chain-of-thought / thinking mode
+#   coding       — specialised for code generation and software engineering
+#   agentic      — strong at multi-step tool use and autonomous tasks
+#   fast         — optimised for low latency / high throughput
+#   multimodal   — accepts image / video / audio input
+#   large_context — context window ≥ 256 K tokens
+#   moe          — Mixture of Experts (high quality relative to active params)
+#   multilingual — strong non-English language support
+#
+# is_reasoning: true — model allocates internal CoT tokens before answering.
+#   Best for hard tasks; slower and more token-expensive for trivial ones.
+
+providers:
+
+  # --------------------------------------------------------------------------
+  # Cerebras — wafer-scale silicon; fastest inference speeds available
+  # Sign up: https://cloud.cerebras.ai  (no credit card required)
+  # Free limits: 30 RPM, 14,400 RPD, 60K TPM, 1M TPD
+  #   Note: preview models (gpt-oss-120b, zai-glm-4.7, qwen3-235b) are
+  #   currently subject to temporarily reduced limits due to high demand.
+  # --------------------------------------------------------------------------
+  cerebras:
+    enabled: true
+    base_url: "https://api.cerebras.ai/v1"
+    api_key: "${CEREBRAS_API_KEY}"
+    priority: 1
+    rate_limits:
+      rpm: 30
+      rpd: 14400
+      tpm: 60000
+      tpd: 1000000
+    models:
+      # POWERFUL — best overall capability; ~3,000 t/s on Cerebras hardware
+      - id: "gpt-oss-120b"
+        context_window: 131072
+        description: "OpenAI open-weights 120B (Dec 2025). GPT-4o-class quality at ~3,000 t/s — Cerebras flagship. Strong coding, reasoning, and tool use."
+        tags: [coding, agentic, reasoning]
+        is_reasoning: false
+        priority: 1
+
+      # POWERFUL — largest free model on Cerebras; 355B MoE (preview)
+      - id: "zai-glm-4.7"
+        context_window: 131072
+        description: "Z.ai GLM-4.7 355B MoE (2025, preview). Largest model on Cerebras free tier. Best for the most demanding tasks; currently subject to reduced free limits."
+        tags: [coding, reasoning, moe]
+        is_reasoning: false
+        priority: 2
+
+      # FAST — lightweight; highest sustained throughput at ~2,200 t/s
+      - id: "llama3.1-8b"
+        context_window: 131072
+        description: "Llama 3.1 8B (Jul 2024). ~2,200 t/s — use for simple, high-volume tasks where speed matters more than capability."
+        tags: [fast]
+        is_reasoning: false
+        priority: 3
+
+  # --------------------------------------------------------------------------
+  # Groq — LPU inference; ultra-low latency
+  # Sign up: https://console.groq.com  (no credit card required)
+  # Note: Llama 4 Maverick was deprecated Feb 20 2026 in favour of gpt-oss-120b.
+  #       Kimi K2 and Llama 4 Scout are preview — may have tighter limits.
+  # --------------------------------------------------------------------------
+  groq:
+    enabled: true
+    base_url: "https://api.groq.com/openai/v1"
+    api_key: "${GROQ_API_KEY}"
+    priority: 2
+    rate_limits:
+      rpm: 30
+      rpd: 1000
+      tpm: 30000
+    models:
+      # POWERFUL (CODING/AGENTIC) — 60 RPM free; top coding + tool use
+      - id: "moonshotai/kimi-k2-instruct-0905"
+        context_window: 262144
+        description: "Kimi K2 0905 1T MoE (Jun 2025, 32B active). Best coding and agentic model on Groq. 60 RPM free — highest-throughput strong model here. 262K context."
+        tags: [coding, agentic, moe]
+        is_reasoning: false
+        priority: 1
+
+      # BALANCED — flagship general-purpose at fast LPU speeds
+      - id: "openai/gpt-oss-120b"
+        context_window: 131072
+        description: "OpenAI open-weights 120B (Dec 2025). Groq's current production flagship after Maverick deprecation. Strong coding, reasoning, instruction following."
+        tags: [coding, agentic]
+        is_reasoning: false
+        priority: 2
+
+      # MULTIMODAL — Llama 4 Scout; useful when image inputs are needed
+      - id: "meta-llama/llama-4-scout-17b-16e-instruct"
+        context_window: 131072
+        description: "Llama 4 Scout 17B MoE (Apr 2025). Meta's latest open model; multimodal (text+image). Use when visual input or frontier multimodal is needed."
+        tags: [multimodal, moe, agentic]
+        is_reasoning: false
+        priority: 3
+
+      # FAST — highest RPD on Groq; 14,400 req/day for simple tasks
+      - id: "llama-3.1-8b-instant"
+        context_window: 131072
+        description: "Llama 3.1 8B Instant (Jul 2024). 14,400 RPD — highest daily quota on Groq by far. Use for simple/fast tasks at scale to preserve larger-model quotas."
+        tags: [fast]
+        is_reasoning: false
+        priority: 4
+
+  # --------------------------------------------------------------------------
+  # Google AI Studio (Gemini API)
+  # Sign up: https://aistudio.google.com  (free, no credit card)
+  # Free limits vary per model; check https://aistudio.google.com/rate-limit
+  # Note: gemini-3.1-pro-preview requires paid API; use AI Studio UI for free.
+  # --------------------------------------------------------------------------
+  google_ai:
+    enabled: true
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    api_key: "${GOOGLE_AI_API_KEY}"
+    priority: 3
+    rate_limits:
+      rpm: 10
+      rpd: 250
+      tpm: 250000
+    models:
+      # POWERFUL — latest frontier (preview); free on AI Studio API
+      - id: "gemini-3-flash-preview"
+        context_window: 1000000
+        description: "Gemini 3 Flash Preview (Feb 2026). Google's latest frontier model; free via AI Studio. 1M context, multimodal, tool calling. Successor to 2.5 Flash."
+        tags: [reasoning, multimodal, large_context, agentic]
+        is_reasoning: false
+        priority: 1
+
+      # BALANCED — stable production model with 1M context
+      - id: "gemini-2.5-flash"
+        context_window: 1000000
+        description: "Gemini 2.5 Flash (late 2025). Proven production workhorse; thinking mode supported; 1M context; multimodal. Use when preview stability is a concern."
+        tags: [reasoning, multimodal, large_context, fast, agentic]
+        is_reasoning: false
+        priority: 2
+
+      # FAST — lightest frontier model; highest free RPD
+      - id: "gemini-3.1-flash-lite-preview"
+        context_window: 1000000
+        description: "Gemini 3.1 Flash-Lite Preview (Mar 2026). Fastest and cheapest Gemini; 1M context. Use for high-throughput simple tasks where quota matters most."
+        tags: [fast, large_context, multimodal]
+        is_reasoning: false
+        priority: 3
+
+  # --------------------------------------------------------------------------
+  # OpenRouter — aggregates 29+ free models
+  # Sign up: https://openrouter.ai  (200 RPD with payment method on file)
+  # Free limits: ~20 RPM, 50–200 RPD per model
+  # --------------------------------------------------------------------------
+  openrouter:
+    enabled: true
+    base_url: "https://openrouter.ai/api/v1"
+    api_key: "${OPENROUTER_API_KEY}"
+    priority: 4
+    rate_limits:
+      rpm: 20
+      rpd: 200
+    models:
+      # POWERFUL (CODING) — Qwen3 Coder 480B; best free coding model on OR
+      - id: "qwen/qwen3-coder:free"
+        context_window: 262144
+        description: "Qwen3 Coder 480B MoE (2025). Best free coding-specialised model on OpenRouter. Large 262K context; strong SWE-Bench scores."
+        tags: [coding, agentic, moe, large_context]
+        is_reasoning: false
+        priority: 1
+
+      # BALANCED — general-purpose flagship
+      - id: "openai/gpt-oss-120b:free"
+        context_window: 131072
+        description: "OpenAI open-weights 120B (Dec 2025) via OpenRouter. Strong general-purpose capability when other providers are rate-limited."
+        tags: [coding, agentic]
+        is_reasoning: false
+        priority: 2
+
+      # LARGE CONTEXT — 262K context + reasoning + RAG specialist
+      - id: "nvidia/nemotron-3-super-120b-a12b:free"
+        context_window: 262144
+        description: "NVIDIA Nemotron Super 120B MoE (2024). 262K context; hybrid Mamba-Transformer; excellent for RAG, summarisation, and long-document agentic tasks."
+        tags: [agentic, large_context, moe, reasoning]
+        is_reasoning: false
+        priority: 3
+
+      # AUTO — OpenRouter's smart free-model router; no quota overhead
+      - id: "openrouter/free"
+        context_window: 200000
+        description: "OpenRouter free auto-router (always latest). Automatically selects the best currently-available free model. Use as fallback when specific models are down."
+        tags: [agentic]
+        is_reasoning: false
+        priority: 4
+
+  # --------------------------------------------------------------------------
+  # NVIDIA Build (NIM) — credit-based free tier (1,000 credits at signup)
+  # Sign up: https://build.nvidia.com  (requires phone verification)
+  # Free limits: ~40 RPM; credits depleted over time (not a hard RPD cap)
+  # --------------------------------------------------------------------------
+  nvidia_nim:
+    enabled: true
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: "${NVIDIA_API_KEY}"
+    priority: 5
+    rate_limits:
+      rpm: 40
+    models:
+      # POWERFUL (REASONING+RAG) — 262K context, hybrid architecture
+      - id: "nvidia/nemotron-3-super-120b-a12b"
+        context_window: 262144
+        description: "NVIDIA Nemotron Super 120B MoE (2024). 262K context; Mamba-Transformer hybrid; NVIDIA's agentic flagship. Excellent RAG, tool use, long-context reasoning."
+        tags: [agentic, large_context, moe, reasoning]
+        is_reasoning: false
+        priority: 1
+
+      # BALANCED — latest Mistral Small 4 (released same day as this config)
+      - id: "mistral-ai/mistral-small-4-119b-2603"
+        context_window: 256000
+        description: "Mistral Small 4 (Mar 16 2026). 119B hybrid MoE; 256K context; multimodal; unifies reasoning + coding + vision in one model. Available free via NIM credits."
+        tags: [coding, multimodal, large_context, moe, agentic]
+        is_reasoning: false
+        priority: 2
+
+      # REASONING — DeepSeek R1 for deep reasoning tasks
+      - id: "deepseek-ai/deepseek-r1"
+        context_window: 131072
+        description: "DeepSeek R1 (Jan 2025). 671B MoE (37B active); o1-level chain-of-thought reasoning; open weights MIT license. Use for hard math, logic, complex coding."
+        tags: [reasoning, moe]
+        is_reasoning: true
+        priority: 3
+
+  # --------------------------------------------------------------------------
+  # SambaNova Cloud — fast inference; restrictive free tier
+  # Sign up: https://cloud.sambanova.ai  (no credit card required)
+  # Free limits: 20 RPM, 20 RPD, 200K TPD  (very limited without card)
+  # --------------------------------------------------------------------------
+  sambanova:
+    enabled: true
+    base_url: "https://api.sambanova.ai/v1"
+    priority: 6
+    api_key: "${SAMBANOVA_API_KEY}"
+    rate_limits:
+      rpm: 20
+      rpd: 20
+      tpd: 200000
+    models:
+      # POWERFUL (REASONING) — best open reasoning model; save for hardest tasks
+      - id: "DeepSeek-R1-0528"
+        context_window: 163840
+        description: "DeepSeek R1 0528 (May 2025). Latest R1 update; 671B MoE / 37B active; best open reasoning model. Given 20 RPD limit, reserve for genuinely hard tasks."
+        tags: [reasoning, moe]
+        is_reasoning: true
+        priority: 1
+
+      # BALANCED — strong general flagship with tool calling
+      - id: "DeepSeek-V3.1"
+        context_window: 131072
+        description: "DeepSeek V3.1 (Jan 2025). 685B MoE flagship chat model. Strong coding and instruction following; tool calling supported."
+        tags: [coding, agentic, moe]
+        is_reasoning: false
+        priority: 2
+
+      # FAST — reliable workhorse for when R1/V3 quotas are exhausted
+      - id: "Meta-Llama-3.3-70B-Instruct"
+        context_window: 131072
+        description: "Llama 3.3 70B (Dec 2024). Reliable workhorse with tool calling. Use when R1/V3 daily limits are exhausted and a capable fallback is needed."
+        tags: [agentic]
+        is_reasoning: false
+        priority: 3
+
+  # --------------------------------------------------------------------------
+  # Mistral AI — free Experiment plan
+  # Sign up: https://console.mistral.ai  → select Experiment tier
+  # Free limits: ~2 RPM, ~1B tokens/month (very limited — prototyping only)
+  # Note: Devstral 2 and Codestral moved to paid. Magistral Small/Medium paid.
+  # --------------------------------------------------------------------------
+  mistral:
+    enabled: true
+    base_url: "https://api.mistral.ai/v1"
+    api_key: "${MISTRAL_API_KEY}"
+    priority: 7
+    rate_limits:
+      rpm: 2
+      tpm: 100000
+    models:
+      # POWERFUL — Mistral's new unified flagship (released today 2026-03-16)
+      - id: "mistral-small-2603"
+        context_window: 256000
+        description: "Mistral Small 4 (Mar 16 2026). 119B hybrid MoE; 256K context; multimodal; unifies reasoning + Devstral coding + vision. Best free Mistral model."
+        tags: [coding, multimodal, large_context, moe, agentic]
+        is_reasoning: false
+        priority: 1
+
+      # BALANCED — large frontier model on the Experiment plan
+      - id: "mistral-large-2412"
+        context_window: 131072
+        description: "Mistral Large 3 (Dec 2025). 675B model; most capable Mistral on free tier. Strong reasoning and multilingual support."
+        tags: [reasoning, multilingual]
+        is_reasoning: false
+        priority: 2
+
+      # FAST — lightweight open-weight model with vision
+      - id: "open-mistral-nemo"
+        context_window: 131072
+        description: "Mistral NeMo 12B (Jul 2024). Lightweight open-weight model; fast and multilingual. Use for simple tasks to preserve quota of larger models."
+        tags: [fast, multilingual]
+        is_reasoning: false
+        priority: 3
+
+# ---------------------------------------------------------------------------
+# Local LLM (Ollama)
+# ---------------------------------------------------------------------------
+local:
+  ollama:
+    base_url: "http://ollama:11434"
+    router_model: "gpt-oss:20b"
+    fallback_model: "gpt-oss:20b"
+    fallback_enabled: true
+
+# ---------------------------------------------------------------------------
+# Proxy server settings
+# ---------------------------------------------------------------------------
+proxy:
+  port: 8765
+  host: "0.0.0.0"
+  log_level: "info"
+  output_token_reserve: 4096
+  memory_warning_threshold: 0.80
+  memory_critical_threshold: 0.90
