@@ -5,7 +5,7 @@
 ```
 OpenClaw → FreeClawRouter (port 8765) → [ Cerebras / Groq / Gemini / OpenRouter / NVIDIA / SambaNova / Mistral ]
                                                    ↓ (all limits hit)
-                                             Local Ollama (gpt-oss:20b)
+                                             Local Ollama (phi4-mini)
 ```
 
 ---
