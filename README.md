@@ -311,6 +311,8 @@ The dashboard auto-refreshes every 10 seconds and shows:
 | **Last 24 h (line)** | Hourly request volume per provider — see traffic patterns over time |
 | **Last 7 days (bar)** | Daily request volume stacked by provider |
 | **Test Models tab** | Cloud models: one-shot test in parallel (20 s each). Local model: separate button with 60 s timeout for cold-start loading |
+| **Chat tab** | ChatGPT-like interface that streams responses directly from any configured provider. Supports model selection, multi-turn memory, and markdown rendering |
+| **Logs tab** | Real-time terminal stream of OpenClaw container stdout/stderr via the Docker socket API. Connect/Disconnect, Clear, auto-scroll toggle, line counter, colour-coded by log level |
 | **Settings → Router mode** | `local` (Ollama LLM, default) / `python` (deterministic scoring, fastest) / `api` (fast cloud model) — no restart needed |
 | **Settings → Local AI fallback** | When to route to local Ollama instead of cloud APIs (disabled / simple / moderate / always) |
 | **Settings → Local Model** | Ollama connection status indicator + dropdown to select which local model to use; supports `phi4-mini`, `gpt-oss:20b`, `qwen3.5` variants, or "none" to disable |
@@ -340,6 +342,7 @@ http://<host-ip>:8765/dashboard
 | `POST /api/test-models` | Test all configured cloud models in parallel; returns pass/fail + latency |
 | `POST /api/test-local` | Test the local Ollama model with a 60 s timeout (handles cold-start loading) |
 | `POST /api/clear-history` | Delete usage records by period (`{"period":"hour"\|"day"\|"month"\|"all"}`) |
+| `GET /api/openclaw-logs` | SSE stream of OpenClaw container logs (stdout + stderr) via Docker socket |
 | `POST /v1/chat/completions` | Main proxy endpoint (OpenAI-compatible) |
 | `GET /v1/models` | List all configured models |
 | `GET /health` | Liveness probe |

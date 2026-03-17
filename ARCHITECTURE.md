@@ -157,10 +157,12 @@ message content, no authentication data. This satisfies PRD §4.1.
 
 `phi4-mini` is the default local router/fallback model. Some reasoning models
 (e.g. `gpt-oss:20b`) use string-based thinking levels (`"low"`, `"medium"`,
-`"high"`) rather than boolean `true`/`false`. When such a model is selected, the
-router call uses `"think": "low"` to minimise the reasoning trace so the visible
-response (the option number) is generated within the `num_predict` token budget.
-Other models that don't support this field ignore it silently.
+`"high"`) rather than boolean `true`/`false`. When such a model is selected
+(detected via `"gpt-oss" in router_model`), the router call includes
+`"think": "low"` to minimise the reasoning trace so the visible response (the
+option number) is generated within the `num_predict` token budget. All other
+models omit this field entirely to avoid HTTP 400 errors from models that reject
+unknown parameters (e.g. `phi4-mini`).
 
 ---
 
@@ -395,7 +397,7 @@ freeclawrouter/
 │   ├── router.py           # HybridRouter (local threshold + Tier 1 + Tier 2)
 │   ├── proxy.py            # HTTP forwarding, retry loop, SSE streaming, OOM guard
 │   ├── health.py           # Provider health tracker (zero extra API calls)
-│   └── dashboard.py        # Web dashboard (Usage + Channels + Settings tabs)
+│   └── dashboard.py        # Web dashboard (Usage + Channels + Test + Chat + Logs + Settings tabs)
 ├── config.yaml             # Default configuration (all providers)
 ├── config.local.yaml       # (git-ignored) Local overrides
 ├── .env                    # (git-ignored) API keys

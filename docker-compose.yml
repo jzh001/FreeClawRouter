@@ -41,6 +41,10 @@ services:
       dockerfile: Dockerfile
     container_name: freeclawrouter_proxy
     restart: unless-stopped
+    # Run as root so the container can access /var/run/docker.sock for the
+    # Logs tab (streaming openclaw container output).  freeclawrouter is a
+    # fully trusted service (it already holds all API keys), so root is safe.
+    user: root
     networks:
       - agent_net
     ports:
@@ -82,6 +86,14 @@ services:
         source: ./openclaw_config
         target: /app/openclaw_config
         read_only: false
+      # Docker socket — read-only; used by the dashboard Logs tab to stream
+      # the openclaw container's stdout/stderr via the Docker logs API.
+      # Note: the Docker socket gives API access to all containers on this host.
+      # Only the /containers/{id}/logs endpoint is used by the dashboard.
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
       interval: 15s

@@ -14,12 +14,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from . import storage as _storage
 from .rate_limiter import RateLimiterRegistry
@@ -108,6 +111,92 @@ async def save_openclaw_channels(request: Request) -> JSONResponse:
 
 
 # ---------------------------------------------------------------------------
+# OpenClaw log streaming
+# ---------------------------------------------------------------------------
+
+_DOCKER_SOCKET = "/var/run/docker.sock"
+_OPENCLAW_CONTAINER = "freeclawrouter_openclaw"
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHFABCDJnsu]")
+
+
+@router.get("/api/openclaw-logs")
+async def openclaw_logs(tail: int = 300):
+    """
+    Stream the OpenClaw container's stdout+stderr as Server-Sent Events.
+    Each event is JSON: {"line": "...", "stream": "stdout"|"stderr"}.
+    Requires /var/run/docker.sock to be mounted in the freeclawrouter container.
+    """
+    async def _generate():
+        try:
+            transport = httpx.AsyncHTTPTransport(uds=_DOCKER_SOCKET)
+            async with httpx.AsyncClient(
+                transport=transport,
+                timeout=httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0),
+            ) as client:
+                async with client.stream(
+                    "GET",
+                    f"http://localhost/containers/{_OPENCLAW_CONTAINER}/logs",
+                    params={
+                        "stdout": "true",
+                        "stderr": "true",
+                        "follow":  "true",
+                        "tail":    str(tail),
+                        "timestamps": "false",
+                    },
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        msg = body.decode("utf-8", errors="replace")[:300]
+                        yield f"data: {json.dumps({'error': f'Docker API {resp.status_code}: {msg}'})}\n\n"
+                        return
+
+                    buf = b""
+                    async for chunk in resp.aiter_bytes():
+                        buf += chunk
+                        # Docker multiplexed stream: 8-byte header + payload
+                        # Header byte 0: stream type (1=stdout, 2=stderr)
+                        # Header bytes 4-7: frame size (big-endian uint32)
+                        while len(buf) >= 8:
+                            stream_type = buf[0]
+                            frame_size  = int.from_bytes(buf[4:8], "big")
+                            if len(buf) < 8 + frame_size:
+                                break
+                            frame = buf[8:8 + frame_size].decode("utf-8", errors="replace")
+                            buf   = buf[8 + frame_size:]
+
+                            frame = _ANSI_RE.sub("", frame)
+                            for line in frame.splitlines():
+                                line = line.strip()
+                                if line:
+                                    yield (
+                                        "data: "
+                                        + json.dumps({
+                                            "line":   line,
+                                            "stream": "stderr" if stream_type == 2 else "stdout",
+                                        })
+                                        + "\n\n"
+                                    )
+
+        except FileNotFoundError:
+            yield (
+                "data: "
+                + json.dumps({"error": (
+                    "Docker socket not found (/var/run/docker.sock). "
+                    "Add the socket bind-mount to docker-compose.yml and rebuild."
+                )})
+                + "\n\n"
+            )
+        except Exception as exc:
+            yield "data: " + json.dumps({"error": f"Stream error: {str(exc)[:300]}"}) + "\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Usage data endpoint
 # ---------------------------------------------------------------------------
 
@@ -148,6 +237,7 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>FreeClawRouter</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 <style>
   :root {
     --bg:#0f1117; --surface:#1a1d27; --border:#2a2d3a;
@@ -261,6 +351,58 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     .summary{grid-template-columns:1fr 1fr}
     .field-row{grid-template-columns:1fr}
   }
+
+  /* ---- Logs tab ---- */
+  #tab-logs{height:calc(100vh - 100px);display:flex;flex-direction:column;overflow:hidden}
+  .logs-wrap{flex:1;display:flex;flex-direction:column;padding:14px 24px 0;max-width:1400px;margin:0 auto;width:100%;overflow:hidden}
+  .logs-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-shrink:0;flex-wrap:wrap}
+  .logs-toolbar .lbl{font-size:12px;color:var(--muted);font-weight:600}
+  #logs-output{flex:1;overflow-y:auto;background:#080a0f;border:1px solid var(--border);border-radius:10px;padding:12px 16px;font-family:'Consolas','SF Mono',monospace;font-size:12.5px;line-height:1.7;color:#94a8b8;margin-bottom:12px}
+  .log-line{white-space:pre-wrap;word-break:break-all}
+  .log-err{color:#ef9a9a}.log-warn{color:#ffcc80}.log-tg{color:#80cbc4}.log-proxy{color:#9fa8da}.log-ok{color:#a5d6a7}.log-dim{color:#546475}
+
+  /* ---- Chat tab ---- */
+  #tab-chat{height:calc(100vh - 100px);display:flex;flex-direction:column;overflow:hidden}
+  .chat-wrap{flex:1;display:flex;flex-direction:column;max-width:860px;margin:0 auto;width:100%;padding:0 24px;overflow:hidden}
+  .chat-toolbar{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--border);flex-shrink:0}
+  .chat-toolbar label{font-size:12px;color:var(--muted);font-weight:600;white-space:nowrap}
+  .chat-toolbar select{background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:13px;padding:6px 10px;outline:none;flex:1;max-width:320px}
+  .chat-toolbar select:focus{border-color:var(--accent)}
+  .chat-messages{flex:1;overflow-y:auto;padding:16px 0;display:flex;flex-direction:column;gap:14px;scroll-behavior:smooth}
+  .chat-msg{display:flex;gap:10px;align-items:flex-start}
+  .chat-msg.user{flex-direction:row-reverse}
+  .chat-avatar{width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:15px;margin-top:2px}
+  .chat-msg.user .chat-avatar{background:var(--accent)}
+  .chat-msg.assistant .chat-avatar{background:var(--border)}
+  .chat-bubble{max-width:78%;padding:11px 15px;border-radius:14px;line-height:1.65;font-size:14px;word-break:break-word}
+  .chat-msg.user .chat-bubble{background:var(--accent);color:#fff;border-radius:14px 14px 4px 14px}
+  .chat-msg.assistant .chat-bubble{background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:4px 14px 14px 14px}
+  .chat-bubble pre{background:#0a0c12;border:1px solid var(--border);border-radius:7px;padding:10px 13px;margin:8px 0;overflow-x:auto}
+  .chat-bubble code{font-family:'Consolas','SF Mono',monospace;font-size:12.5px;background:rgba(255,255,255,.07);border-radius:4px;padding:1px 5px}
+  .chat-bubble pre code{background:none;padding:0}
+  .chat-bubble p{margin:0 0 8px}.chat-bubble p:last-child{margin:0}
+  .chat-bubble h1,.chat-bubble h2,.chat-bubble h3{margin:10px 0 5px;font-size:15px}
+  .chat-bubble ul,.chat-bubble ol{padding-left:20px;margin:5px 0}
+  .chat-bubble li{margin:2px 0}
+  .chat-bubble blockquote{border-left:3px solid var(--accent);margin:8px 0;padding:3px 12px;color:var(--muted)}
+  .chat-bubble table{border-collapse:collapse;margin:8px 0;width:100%}
+  .chat-bubble th,.chat-bubble td{border:1px solid var(--border);padding:5px 10px;font-size:13px}
+  .chat-bubble th{background:var(--bg)}
+  .chat-meta{font-size:11px;color:var(--muted);margin-top:4px}
+  .chat-msg.user .chat-meta{text-align:right}
+  .chat-empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:8px;text-align:center}
+  .chat-empty-state .big-icon{font-size:40px;margin-bottom:4px}
+  .chat-empty-state h3{color:var(--text);font-size:17px;margin:0}
+  .chat-input-area{padding:12px 0 16px;flex-shrink:0}
+  .chat-input-row{display:flex;gap:10px;align-items:flex-end;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:10px 12px;transition:border-color .15s}
+  .chat-input-row:focus-within{border-color:var(--accent)}
+  #chat-input{flex:1;background:none;border:none;color:var(--text);font-family:inherit;font-size:14px;resize:none;outline:none;max-height:140px;line-height:1.5;min-height:22px}
+  #chat-input::placeholder{color:var(--muted)}
+  .chat-send-btn{background:var(--accent);border:none;color:#fff;border-radius:8px;padding:6px 16px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .15s;flex-shrink:0;font-family:inherit;line-height:1.5}
+  .chat-send-btn:hover{opacity:.85}.chat-send-btn:disabled{opacity:.4;cursor:default}
+  .typing-cursor{display:inline-block;width:2px;height:14px;background:var(--text);margin-left:2px;vertical-align:middle;animation:blink-c .7s steps(1) infinite}
+  @keyframes blink-c{0%,100%{opacity:1}50%{opacity:0}}
+  .chat-error{color:#e57373;font-size:13px;padding:6px 0}
 </style>
 </head>
 <body>
@@ -279,6 +421,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
   <button class="tab-btn"        id="btn-channels" onclick="switchTab('channels')">&#128241; Messaging Apps</button>
   <button class="tab-btn"        id="btn-test"     onclick="switchTab('test')">&#129514; Test Models</button>
   <button class="tab-btn"        id="btn-settings" onclick="switchTab('settings')">&#9881;&#65039; Settings</button>
+  <button class="tab-btn"        id="btn-logs"     onclick="switchTab('logs')">&#128196; Logs</button>
+  <button class="tab-btn"        id="btn-chat"     onclick="switchTab('chat')">&#128172; Chat</button>
 </nav>
 
 <!-- ====================================================
@@ -628,6 +772,55 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
 </main>
 </div><!-- end test tab -->
 
+<!-- ====================================================
+     LOGS TAB
+     ==================================================== -->
+<div id="tab-logs" style="display:none">
+  <div class="logs-wrap">
+    <div class="logs-toolbar">
+      <span class="lbl">OpenClaw Container Logs</span>
+      <span id="logs-status" style="font-size:12px;color:var(--muted);padding:3px 10px;background:var(--border);border-radius:20px">&#9679; Disconnected</span>
+      <button class="btn-save"   id="logs-connect-btn" style="padding:6px 16px;font-size:13px" onclick="toggleLogsConnect()">&#9654; Connect</button>
+      <button class="btn-danger" style="padding:6px 14px;font-size:13px" onclick="clearLogs()">Clear</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;margin-left:4px">
+        <input type="checkbox" id="logs-autoscroll" checked style="accent-color:var(--accent)"> Auto-scroll
+      </label>
+      <span id="logs-line-count" style="margin-left:auto;font-size:12px;color:var(--muted)">0 lines</span>
+    </div>
+    <div id="logs-output"></div>
+  </div>
+</div><!-- end logs tab -->
+
+<!-- ====================================================
+     CHAT TAB
+     ==================================================== -->
+<div id="tab-chat" style="display:none">
+  <div class="chat-wrap">
+    <div class="chat-toolbar">
+      <label for="chat-model-sel">Model</label>
+      <select id="chat-model-sel">
+        <option value="freeclawrouter-auto">&#128293; Auto (best available)</option>
+      </select>
+      <button class="btn-save" style="margin-left:auto;padding:6px 16px;font-size:13px" onclick="newChat()">+ New Chat</button>
+    </div>
+    <div class="chat-messages" id="chat-messages">
+      <div class="chat-empty-state" id="chat-empty-state">
+        <div class="big-icon">&#128293;</div>
+        <h3>FreeClawRouter Chat</h3>
+        <p>Send a message to start chatting with the AI.</p>
+      </div>
+    </div>
+    <div class="chat-input-area">
+      <div class="chat-input-row">
+        <textarea id="chat-input" class="chat-input" rows="1"
+          placeholder="Message the AI\u2026 (Enter to send, Shift+Enter for new line)"></textarea>
+        <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMessage()">Send &#8593;</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:center" id="chat-route-info"></div>
+    </div>
+  </div>
+</div><!-- end chat tab -->
+
 <script>
 // ============================================================
 // Tab switching
@@ -637,13 +830,19 @@ function switchTab(name) {
   document.getElementById('tab-channels').style.display = name==='channels' ? '' : 'none';
   document.getElementById('tab-test').style.display     = name==='test'     ? '' : 'none';
   document.getElementById('tab-settings').style.display = name==='settings' ? '' : 'none';
+  document.getElementById('tab-logs').style.display     = name==='logs'     ? '' : 'none';
+  document.getElementById('tab-chat').style.display     = name==='chat'     ? '' : 'none';
   document.getElementById('btn-usage').classList.toggle('active',    name==='usage');
   document.getElementById('btn-channels').classList.toggle('active', name==='channels');
   document.getElementById('btn-test').classList.toggle('active',     name==='test');
   document.getElementById('btn-settings').classList.toggle('active', name==='settings');
+  document.getElementById('btn-logs').classList.toggle('active',     name==='logs');
+  document.getElementById('btn-chat').classList.toggle('active',     name==='chat');
   document.getElementById('refresh-badge').style.display = name==='usage' ? '' : 'none';
   if (name === 'channels') loadChannels();
   if (name === 'settings') loadSettings();
+  if (name === 'chat') loadChatModels();
+  if (name !== 'logs' && _logsConnected) { /* keep streaming in background */ }
 }
 
 // ============================================================
@@ -1070,6 +1269,298 @@ async function clearHistory(period){
     msg.textContent='Error: '+e.message;
   }
 }
+
+// ============================================================
+// Logs tab
+// ============================================================
+let _logsEventSource = null;
+let _logsConnected   = false;
+let _logsLineCount   = 0;
+
+function toggleLogsConnect() {
+  _logsConnected ? _disconnectLogs() : _connectLogs();
+}
+
+function _connectLogs() {
+  const output  = document.getElementById('logs-output');
+  const status  = document.getElementById('logs-status');
+  const btn     = document.getElementById('logs-connect-btn');
+
+  _logsEventSource = new EventSource('/api/openclaw-logs?tail=300');
+  _logsConnected   = true;
+  btn.textContent  = '\u23F9 Disconnect';
+  status.textContent = '\u25CF Connected';
+  status.style.color = 'var(--green)';
+
+  _logsEventSource.onmessage = function(e) {
+    try {
+      const d = JSON.parse(e.data);
+      if (d.error) { _appendLogLine('[ERROR] ' + d.error, 'err'); return; }
+      _appendLogLine(d.line, _classifyLogLine(d.line, d.stream));
+    } catch { _appendLogLine(e.data, 'stdout'); }
+  };
+
+  _logsEventSource.onerror = function() {
+    status.textContent = '\u25CF Reconnecting\u2026';
+    status.style.color = 'var(--yellow)';
+  };
+
+  _logsEventSource.onopen = function() {
+    status.textContent = '\u25CF Connected';
+    status.style.color = 'var(--green)';
+  };
+}
+
+function _disconnectLogs() {
+  if (_logsEventSource) { _logsEventSource.close(); _logsEventSource = null; }
+  _logsConnected = false;
+  document.getElementById('logs-connect-btn').textContent = '\u25B6 Connect';
+  const status = document.getElementById('logs-status');
+  status.textContent = '\u25CF Disconnected';
+  status.style.color = 'var(--muted)';
+}
+
+function clearLogs() {
+  document.getElementById('logs-output').innerHTML = '';
+  _logsLineCount = 0;
+  document.getElementById('logs-line-count').textContent = '0 lines';
+}
+
+function _classifyLogLine(line, stream) {
+  if (stream === 'stderr')                                       return 'err';
+  const l = line.toLowerCase();
+  if (l.includes('error') || l.includes('exception'))           return 'err';
+  if (l.includes('warn'))                                        return 'warn';
+  if (l.includes('[telegram]') || l.includes('[whatsapp]'))      return 'tg';
+  if (l.includes('sendmessage ok') || l.includes('connected'))   return 'ok';
+  if (l.includes('freeclawrouter') || l.includes('[proxy]'))     return 'proxy';
+  if (l.includes('starting') || l.includes('listening'))         return 'ok';
+  if (l.includes('dnsresultorder') || l.includes('autoselect'))  return 'dim';
+  return '';
+}
+
+function _appendLogLine(text, cls) {
+  const output = document.getElementById('logs-output');
+  const div    = document.createElement('div');
+  div.className = 'log-line' + (cls ? ' log-' + cls : '');
+  div.textContent = text;
+  output.appendChild(div);
+
+  _logsLineCount++;
+  document.getElementById('logs-line-count').textContent = _logsLineCount + ' lines';
+
+  // Keep DOM from growing unbounded — drop oldest lines over 2000
+  if (_logsLineCount > 2000) {
+    output.removeChild(output.firstChild);
+    _logsLineCount--;
+  }
+
+  if (document.getElementById('logs-autoscroll').checked) {
+    output.scrollTop = output.scrollHeight;
+  }
+}
+
+// Pause auto-scroll when user manually scrolls up
+document.getElementById('logs-output').addEventListener('scroll', function() {
+  const atBottom = this.scrollHeight - this.scrollTop - this.clientHeight < 40;
+  document.getElementById('logs-autoscroll').checked = atBottom;
+});
+
+// ============================================================
+// Chat tab
+// ============================================================
+let _chatHistory = [];   // [{role, content}, ...]
+let _chatStreaming = false;
+let _chatModelsLoaded = false;
+
+marked.setOptions({ breaks: true, gfm: true });
+
+async function loadChatModels() {
+  if (_chatModelsLoaded) return;
+  try {
+    const r = await fetch('/v1/models');
+    const d = await r.json();
+    const sel = document.getElementById('chat-model-sel');
+    (d.data || []).forEach(m => {
+      if (m.id === 'freeclawrouter-auto') return; // already default
+      const opt = document.createElement('option');
+      opt.value = m.id;
+      opt.textContent = m.id;
+      sel.appendChild(opt);
+    });
+    _chatModelsLoaded = true;
+  } catch(e) { console.warn('Could not load models:', e); }
+}
+
+function newChat() {
+  if (_chatStreaming) return;
+  _chatHistory = [];
+  const msgs = document.getElementById('chat-messages');
+  msgs.innerHTML = `<div class="chat-empty-state" id="chat-empty-state">
+    <div class="big-icon">&#128293;</div>
+    <h3>FreeClawRouter Chat</h3>
+    <p>Send a message to start chatting with the AI.</p>
+  </div>`;
+  document.getElementById('chat-route-info').textContent = '';
+  document.getElementById('chat-input').focus();
+}
+
+function _chatScrollBottom() {
+  const msgs = document.getElementById('chat-messages');
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function _appendMsg(role, content, meta) {
+  const empty = document.getElementById('chat-empty-state');
+  if (empty) empty.remove();
+
+  const msgs = document.getElementById('chat-messages');
+  const wrap = document.createElement('div');
+  wrap.className = 'chat-msg ' + role;
+  const avatar = role === 'user' ? '&#128100;' : '&#128293;';
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble';
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'chat-meta';
+  if (meta) metaEl.textContent = meta;
+
+  const col = document.createElement('div');
+  col.style.display = 'flex';
+  col.style.flexDirection = 'column';
+  col.style.maxWidth = '78%';
+  if (role === 'user') col.style.alignItems = 'flex-end';
+
+  col.appendChild(bubble);
+  if (meta) col.appendChild(metaEl);
+
+  wrap.innerHTML = `<div class="chat-avatar">${avatar}</div>`;
+  wrap.appendChild(col);
+  msgs.appendChild(wrap);
+  _chatScrollBottom();
+  return { bubble, metaEl };
+}
+
+async function sendChatMessage() {
+  if (_chatStreaming) return;
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+
+  const model = document.getElementById('chat-model-sel').value;
+  input.value = '';
+  input.style.height = 'auto';
+
+  // Append user message
+  _appendMsg('user', text);
+  _chatHistory.push({ role: 'user', content: text });
+
+  // Append placeholder assistant bubble
+  const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const { bubble, metaEl } = _appendMsg('assistant', '', ts);
+  bubble.innerHTML = '<span class="typing-cursor"></span>';
+
+  _chatStreaming = true;
+  document.getElementById('chat-send-btn').disabled = true;
+  document.getElementById('chat-route-info').textContent = '';
+
+  let fullText = '';
+  let routeInfo = '';
+
+  try {
+    const resp = await fetch('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages: _chatHistory, stream: true }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      bubble.innerHTML = `<span class="chat-error">Error ${resp.status}: ${_esc(err.slice(0, 200))}</span>`;
+      _chatHistory.pop();
+      return;
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // Process complete SSE lines
+      const lines = buf.split('\n');
+      buf = lines.pop(); // keep last (possibly incomplete) line
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const raw = trimmed.slice(5).trim();
+        if (raw === '[DONE]') continue;
+        if (raw.startsWith('{')) {
+          try {
+            const chunk = JSON.parse(raw);
+            // Check for error payload
+            if (chunk.error) {
+              bubble.innerHTML = `<span class="chat-error">${_esc(chunk.error.message || 'Upstream error')}</span>`;
+              return;
+            }
+            const delta = chunk.choices?.[0]?.delta?.content || '';
+            if (delta) {
+              fullText += delta;
+              // Show raw text + cursor while streaming
+              bubble.textContent = fullText;
+              bubble.appendChild(Object.assign(document.createElement('span'), { className: 'typing-cursor' }));
+              _chatScrollBottom();
+            }
+            // Capture model info from first chunk
+            if (!routeInfo && chunk.model) {
+              routeInfo = chunk.model;
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // Render markdown once streaming is complete
+    if (fullText) {
+      bubble.innerHTML = marked.parse(fullText);
+      _chatHistory.push({ role: 'assistant', content: fullText });
+    } else {
+      bubble.innerHTML = '<span style="color:var(--muted);font-style:italic">No response</span>';
+    }
+    if (routeInfo) {
+      document.getElementById('chat-route-info').textContent = '\u2192 ' + routeInfo;
+    }
+    _chatScrollBottom();
+
+  } catch(e) {
+    bubble.innerHTML = `<span class="chat-error">Connection error: ${_esc(String(e))}</span>`;
+    _chatHistory.pop();
+  } finally {
+    _chatStreaming = false;
+    document.getElementById('chat-send-btn').disabled = false;
+    document.getElementById('chat-input').focus();
+  }
+}
+
+function _esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// Auto-resize textarea; Enter = send, Shift+Enter = newline
+document.getElementById('chat-input').addEventListener('input', function() {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 140) + 'px';
+});
+document.getElementById('chat-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
 
 let countdown=10;
 async function fetchAndUpdate(){try{const r=await fetch('/api/dashboard-data');update(await r.json())}catch(e){console.warn(e)}}

@@ -114,12 +114,30 @@ def _estimate_complexity(payload: dict[str, Any]) -> str:
     """
     Classify request complexity from structural signals only.
     Never reads actual message content.
+
+    Key distinction:
+      - "tools defined" (schema present): OpenClaw sends this on EVERY request —
+        it is NOT a signal of actual tool use.
+      - "tools active" (tool results or tool_calls in message history): the model
+        is mid-way through an agentic loop and genuinely needs a capable model.
+
+    Levels:
+      complex  — tools actively firing, or established agentic loop (turn > 3),
+                 or very long input (> 4 K chars).  Needs large context + agentic model.
+      moderate — tools defined (may be needed soon), or medium conversation,
+                 or moderately long message.  Medium-capable model is appropriate.
+      simple   — short single/double-turn with no active tool use.
+                 A fast small model suffices.
     """
     messages = payload.get("messages", [])
-    has_tools = bool(payload.get("tools"))
-    has_tool_calls = any(
-        m.get("role") == "tool" or m.get("tool_calls") for m in messages
+    tools = payload.get("tools") or []
+
+    # "Active" tool use: a tool result exists or the assistant made a tool call.
+    # This means an agentic loop is in flight — the model MUST handle continuations.
+    has_active_tool_calls = any(
+        m.get("role") == "tool" or bool(m.get("tool_calls")) for m in messages
     )
+
     turn_count = sum(1 for m in messages if m.get("role") in ("user", "assistant"))
     last_user = next(
         (m for m in reversed(messages) if m.get("role") == "user"), None
@@ -131,10 +149,18 @@ def _estimate_complexity(payload: dict[str, Any]) -> str:
             len(p.get("text", "")) for p in content if isinstance(p, dict)
         )
 
-    if has_tools or has_tool_calls:
+    # Complex: tools actually firing, deep conversation with tools, or huge input
+    if has_active_tool_calls:
         return "complex"
-    if turn_count > 6 or user_msg_len > 2000:
+    if tools and turn_count > 3:
+        return "complex"
+    if user_msg_len > 4000:
+        return "complex"
+
+    # Moderate: tools defined (might fire next turn), or medium-length exchange
+    if tools or turn_count > 4 or user_msg_len > 1000:
         return "moderate"
+
     return "simple"
 
 
@@ -170,12 +196,16 @@ def _score_candidate(info: CandidateInfo, input_tokens: int, complexity: str) ->
        across all providers so no single provider's daily quota is exhausted
        while others sit idle.
 
-    D. Complexity + capability matching (up to ±15 pts)
-       Match model strengths (tags) to request characteristics:
-         - complex: prefer [agentic], [reasoning], large context
-         - simple:  prefer [fast]; avoid burning [reasoning] on trivial tasks
-         - reasoning models get extra penalty for simple requests (slow + wasteful)
-         - coding/agentic models get bonus when tools are active
+    D. Complexity + size matching (up to ±20 pts)
+       Right-size the model to the request.  The key insight: NIM (no daily cap)
+       gets +40 from A+B before D runs, so D must be strong enough to overcome
+       that head-start when a smaller/faster model is more appropriate.
+
+       complex  → reward large-context agentic models; penalise undersized
+       moderate → mild reward for agentic/coding capability and efficiency;
+                  penalise 1M-token models (wasteful overhead)
+       simple   → strongly reward [fast] small models; heavily penalise oversized
+                  models (large ctx window = unnecessary latency + wasted capacity)
 
     E. Provider priority tiebreaker (up to +5 pts)
     """
@@ -223,43 +253,56 @@ def _score_candidate(info: CandidateInfo, input_tokens: int, complexity: str) ->
         score += (min(daily_pcts) / 100.0) * 15  # up to +15
 
     # ------------------------------------------------------------------
-    # D. Complexity + capability matching
+    # D. Complexity + size matching
     # ------------------------------------------------------------------
     ctx_k = info.model.context_window // 1024
 
     if complexity == "complex":
-        # Tool-use / multi-step agent loops: need agentic capability + large ctx
+        # Active tool-use / multi-step agentic loop — needs large context + capability
         if "agentic" in tags:
             score += 8
         if "coding" in tags:
-            score += 4   # coding models are often strong at tool-use too
+            score += 4   # coding models handle tool-use well
         if "reasoning" in tags or info.model.is_reasoning:
-            score += 5   # reasoning helps for complex multi-step tasks
+            score += 5   # reasoning helps for complex multi-step planning
         if ctx_k >= 128:
             score += 5
         elif ctx_k < 32:
-            score -= 10  # too small — will fail mid-task
+            score -= 10  # too small — will truncate mid-task
 
     elif complexity == "moderate":
-        # Multi-turn or long messages: context matters, reasoning is a mild bonus
+        # Tools defined but not yet firing, or medium-length exchange.
+        # Prefer capable-but-not-oversized models.
+        if "agentic" in tags or "coding" in tags:
+            score += 5   # useful capability bonus
         if "reasoning" in tags or info.model.is_reasoning:
             score += 3
         if ctx_k >= 64:
             score += 3
         elif ctx_k < 16:
             score -= 5
+        if ctx_k > 512:
+            score -= 6   # 1M-context models are wasteful overhead for moderate tasks
+        if "fast" in tags:
+            score += 4   # prefer efficient models when heavy capability isn't needed
 
     elif complexity == "simple":
-        # Single-turn / short: prefer fast models; penalise heavy reasoning models
+        # Short single/double-turn, no active tool use.
+        # Right-sizing matters most: large models add latency with no benefit.
         if "fast" in tags:
-            score += 8
+            score += 14  # strong preference for purpose-built fast/small models
         if info.model.is_reasoning:
-            # Reasoning models burn extra tokens on internal CoT before replying.
-            # Wasting a [reasoning] slot on a trivial task is doubly inefficient:
-            # it's slower AND it consumes more tokens against daily budgets.
-            score -= 10
-        if ctx_k > 256:
-            score -= 5   # oversized model for a trivial task — save the slot
+            # Reasoning models burn internal CoT tokens before the visible reply.
+            # Wasting a reasoning slot on a trivial task is doubly inefficient:
+            # slower AND consumes more daily quota.
+            score -= 15
+        # Oversized models for simple tasks: unnecessary latency + wastes capacity.
+        # These penalties must exceed NIM's structural +40 (A+B) advantage so that
+        # a small fast model wins over a large agentic one for simple requests.
+        if ctx_k > 128:
+            score -= 14  # 130K+ context model overkill for a short question
+        elif ctx_k > 64:
+            score -= 7   # 65–128K: somewhat oversized, mild penalty
 
     # ------------------------------------------------------------------
     # E. Provider priority (tiebreaker)
@@ -495,9 +538,9 @@ REQUEST SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Input tokens : {input_tokens}
   Complexity   : {complexity}
-    simple   = single-turn or short prompt
-    moderate = multi-turn conversation or long message
-    complex  = active tool use / multi-step agent loop (needs ≥128K context)
+    simple   = short 1–2 turn, no active tool calls  → prefer fast/small models
+    moderate = tools defined but not yet firing, or medium conversation → medium model
+    complex  = tools actively in use OR deep multi-turn loop → needs large ctx + agentic model
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 MODEL CAPABILITY REFERENCE

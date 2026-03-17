@@ -88,13 +88,37 @@ providers:
         is_reasoning: false
         priority: 1
 
+      # CODING POWERHOUSE — state-of-the-art agentic coding, 262K context
+      - id: "qwen/qwen3-coder-480b-a35b-instruct"
+        context_window: 262144
+        description: "Qwen3 Coder 480B A35B Instruct (Jul 2025). SOTA coding and agentic model; 480B MoE / 35B active; 262K context. Best open coding model available. Beats GPT-4o on code benchmarks."
+        tags: [coding, agentic, moe, large_context]
+        is_reasoning: false
+        priority: 2
+
+      # REASONING (mid) — strong open reasoning at moderate latency
+      - id: "qwen/qwq-32b"
+        context_window: 131072
+        description: "QwQ 32B (Mar 2025). Alibaba's dedicated reasoning model; 128K context. Competitive with DeepSeek-R1 and o1-mini on math/coding benchmarks. Better latency than Nemotron 120B."
+        tags: [reasoning, coding]
+        is_reasoning: true
+        priority: 3
+
       # BALANCED — capable 70B model; strong tool calling + coding
       - id: "meta/llama-3.3-70b-instruct"
         context_window: 131072
         description: "Llama 3.3 70B Instruct (Dec 2024). Meta's current production flagship on NIM. Strong coding, tool calling, and instruction following. Free within NIM credits."
         tags: [coding, agentic]
         is_reasoning: false
-        priority: 2
+        priority: 4
+
+      # BALANCED (GENERAL) — capable mid-size instruction model
+      - id: "mistralai/mistral-small-24b-instruct"
+        context_window: 32768
+        description: "Mistral Small 24B Instruct 2501 (Jan 2025). Compact but capable instruction model; strong multilingual and general-purpose. Good balance of quality and latency."
+        tags: [multilingual, agentic]
+        is_reasoning: false
+        priority: 5
 
       # FAST — lightweight 8B model; highest throughput for simple tasks
       - id: "meta/llama-3.1-8b-instruct"
@@ -102,7 +126,7 @@ providers:
         description: "Llama 3.1 8B Instruct (Jul 2024). Lightweight fast model on NIM. Use for high-volume simple tasks to preserve credits of larger models."
         tags: [fast]
         is_reasoning: false
-        priority: 3
+        priority: 6
 
   # --------------------------------------------------------------------------
   # Groq — LPU inference; ultra-low latency

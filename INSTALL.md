@@ -170,6 +170,8 @@ You will see:
 - **Usage tab** — live charts showing requests, tokens, and provider health
 - **Messaging Apps tab** — connect Telegram or WhatsApp to your AI assistant
 - **Test Models tab** — send a quick test to every configured model to verify they all work
+- **Chat tab** — ChatGPT-like interface for chatting directly with any configured provider; supports streaming and markdown rendering
+- **Logs tab** — real-time stream of OpenClaw's output so you can see what the agent is doing
 - **Settings tab** — choose when to use your local AI model, and which local model to use; also shows whether Ollama is connected (green dot = running, red = not detected)
 
 The dashboard refreshes automatically every 10 seconds.
