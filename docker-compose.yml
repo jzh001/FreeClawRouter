@@ -11,7 +11,7 @@
 #   • Linux/Windows GPU drivers are available without Docker passthrough
 #
 # Before starting: install Ollama from https://ollama.com and run:
-#   ollama pull gpt-oss:20b
+#   ollama pull phi4-mini
 #
 # Security (PRD §4):
 #   • openclaw runs as a non-root user with no host volume mounts
@@ -121,11 +121,9 @@ services:
       # A dummy key is required syntactically; FreeClawRouter ignores it and uses
       # the real provider keys from its own .env
       - OPENAI_API_KEY=freeclawrouter-local-key
-      # Web search: OpenClaw auto-detects the provider from whichever key is present
-      # (priority: Brave → Gemini → Perplexity → Grok).  GOOGLE_AI_API_KEY enables
-      # Gemini-grounded search — the only key we already have from .env.
-      # This key is used ONLY for web_search/web_fetch tool calls, not for LLM routing.
-      - GOOGLE_AI_API_KEY=${GOOGLE_AI_API_KEY}
+      # Web search: OpenClaw uses Gemini Google Search Grounding for web_search/web_fetch.
+      # OpenClaw reads GEMINI_API_KEY for this — reuse the same Google AI key from .env.
+      - GEMINI_API_KEY=${GOOGLE_AI_API_KEY}
     # Drop all Linux capabilities for maximum isolation
     cap_drop:
       - ALL

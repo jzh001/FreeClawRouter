@@ -111,10 +111,12 @@ def _check_oom(config: AppConfig, is_local: bool) -> bool:
 # These are safe to strip — they control OpenAI-side storage/logging, not
 # inference behaviour.
 _OPENAI_ONLY_FIELDS = frozenset({
-    "store",            # OpenAI conversation storage API
-    "metadata",         # OpenAI request metadata tagging
-    "service_tier",     # OpenAI service tier selection
-    "prediction",       # OpenAI predicted output (Anthropic-style cache)
+    "store",                # OpenAI conversation storage API
+    "metadata",             # OpenAI request metadata tagging
+    "service_tier",         # OpenAI service tier selection
+    "prediction",           # OpenAI predicted output (Anthropic-style cache)
+    "parallel_tool_calls",  # OpenClaw sends this as `true` for all providers (bug #37048);
+                            # rejected with 422 by Kimi K2, Nemotron, and most non-OpenAI models.
 })
 
 

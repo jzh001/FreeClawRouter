@@ -239,12 +239,12 @@ providers:
       tpd: 200000
     models:
       # POWERFUL (REASONING) — best open reasoning model; save for hardest tasks
-      - id: "DeepSeek-R1-0528"
-        context_window: 163840
-        description: "DeepSeek R1 0528 (May 2025). Latest R1 update; 671B MoE / 37B active; best open reasoning model. Given 20 RPD limit, reserve for genuinely hard tasks."
-        tags: [reasoning, moe]
-        is_reasoning: true
-        priority: 1
+      # - id: "DeepSeek-R1-0528"
+      #   context_window: 163840
+      #   description: "DeepSeek R1 0528 (May 2025). Latest R1 update; 671B MoE / 37B active; best open reasoning model. Given 20 RPD limit, reserve for genuinely hard tasks."
+      #   tags: [reasoning, moe]
+      #   is_reasoning: true
+      #   priority: 1
 
       # FAST — reliable workhorse for when R1 quota is exhausted
       - id: "Meta-Llama-3.3-70B-Instruct"
