@@ -11,7 +11,7 @@
 #   • Linux/Windows GPU drivers are available without Docker passthrough
 #
 # Before starting: install Ollama from https://ollama.com and run:
-#   ollama pull phi4-mini
+#   ollama pull nemotron-3-nano:4b
 #
 # Security (PRD §4):
 #   • openclaw runs as a non-root user with no host volume mounts

@@ -7,7 +7,7 @@
 ```
 OpenClaw → FreeClawRouter (port 8765) → [ Cerebras / Groq / Gemini / OpenRouter / NVIDIA / SambaNova / Mistral ]
                                                    ↓ (all providers unavailable)
-                                             Local Ollama (phi4-mini)
+                                         Local Ollama (nemotron-3-nano:4b)
 ```
 
 ---
@@ -43,11 +43,11 @@ exhausted.
 
 ```bash
 # Install from https://ollama.com, then pull the default router model:
-ollama pull phi4-mini
+ollama pull nemotron-3-nano:4b
 ```
 
 You can choose a different local model from the dashboard **Settings** tab after
-startup (`phi4-mini`, `gpt-oss:20b`, `qwen3.5:9b/4b/2b/0.8b`, or disable local fallback).
+startup (`nemotron-3-nano:4b`, `phi4-mini`, `gpt-oss:20b`, `qwen3.5:9b/4b/2b/0.8b`, or disable local fallback).
 
 ### 2. Clone this repository
 
@@ -318,7 +318,7 @@ The dashboard auto-refreshes every 10 seconds and shows:
 | **Logs tab** | Real-time terminal stream of OpenClaw container stdout/stderr via the Docker socket API. Connect/Disconnect, Clear, auto-scroll toggle, line counter, colour-coded by log level |
 | **Settings → Router mode** | `local` (Ollama LLM, default) / `python` (deterministic scoring, fastest) / `api` (fast cloud model) — no restart needed |
 | **Settings → Local AI fallback** | When to route to local Ollama instead of cloud APIs (disabled / simple / moderate / always) |
-| **Settings → Local Model** | Ollama connection status indicator + dropdown to select which local model to use; supports `phi4-mini`, `gpt-oss:20b`, `qwen3.5` variants, or "none" to disable |
+| **Settings → Local Model** | Ollama connection status indicator + dropdown to select which local model to use; supports `nemotron-3-nano:4b`, `phi4-mini`, `gpt-oss:20b`, `qwen3.5` variants, or "none" to disable |
 | **Usage → Clear History** | Delete usage records by time period (past hour / day / month / all) |
 
 Usage data is stored in a persistent SQLite database (`data/freeclawrouter.db` inside
@@ -390,5 +390,5 @@ This is a known OpenClaw bug with custom providers. Ensure your `openclaw.json`
 explicitly declares `"contextWindow": 131072` (or higher) in the model definition.
 
 **Ollama router model not found**
-Run `ollama pull phi4-mini` on the host (default), or select a different model
+Run `ollama pull nemotron-3-nano:4b` on the host (default), or select a different model
 in the dashboard Settings tab. Run `ollama list` to see installed models.

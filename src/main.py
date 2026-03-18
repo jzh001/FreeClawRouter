@@ -52,6 +52,7 @@ _VALID_ROUTER_MODES = frozenset({"local", "python", "api"})
 # Available local model choices (shown in the dashboard Settings tab).
 # "none" disables local fallback entirely.
 _LOCAL_MODELS = [
+    "nemotron-3-nano:4b",
     "phi4-mini",
     "gpt-oss:20b",
     "qwen3.5:9b",
@@ -472,8 +473,8 @@ async def _test_cloud_model(provider_name: str, base_url: str, api_key: str,
         latency = int((time.monotonic() - start) * 1000)
         if resp.status_code == 200:
             data = resp.json()
-            content = (data.get("choices") or [{}])[0].get("message") or {}
-            content = (content.get("content") or "").strip()
+            msg = (data.get("choices") or [{}])[0].get("message") or {}
+            content = (msg.get("content") or msg.get("thinking") or "").strip()
             usage = data.get("usage") or {}
             tokens = usage.get("total_tokens") or usage.get("prompt_tokens", 0)
             # Record into rate-limiter, health tracker, and persistent storage
@@ -512,7 +513,7 @@ async def _test_cloud_model(provider_name: str, base_url: str, api_key: str,
 
 async def _test_local_model(base_url: str, model_id: str, timeout: float) -> dict[str, Any]:
     url = f"{base_url}/v1/chat/completions"
-    payload = {"model": model_id, "messages": _TEST_PROMPT, "max_tokens": 32, "stream": False}
+    payload = {"model": model_id, "messages": _TEST_PROMPT, "max_tokens": 256, "stream": False}
     start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -522,8 +523,8 @@ async def _test_local_model(base_url: str, model_id: str, timeout: float) -> dic
         latency = int((time.monotonic() - start) * 1000)
         if resp.status_code == 200:
             data = resp.json()
-            content = (data.get("choices") or [{}])[0].get("message") or {}
-            content = (content.get("content") or "").strip()
+            msg = (data.get("choices") or [{}])[0].get("message") or {}
+            content = (msg.get("content") or msg.get("thinking") or "").strip()
             usage = data.get("usage") or {}
             tokens = usage.get("total_tokens") or usage.get("prompt_tokens", 0)
             _storage.record_request("local", model_id,
@@ -531,7 +532,7 @@ async def _test_local_model(base_url: str, model_id: str, timeout: float) -> dic
                                     output_tokens=usage.get("completion_tokens", 0),
                                     total_tokens=tokens, duration_ms=latency, is_local=True)
             return {"provider": "local (Ollama)", "model": model_id, "ok": True,
-                    "latency_ms": latency, "response": content[:80]}
+                    "latency_ms": latency, "response": content[:120]}
         _storage.record_request("local", model_id, is_error=True, is_local=True)
         return {"provider": "local (Ollama)", "model": model_id, "ok": False,
                 "latency_ms": latency, "error": f"HTTP {resp.status_code}",

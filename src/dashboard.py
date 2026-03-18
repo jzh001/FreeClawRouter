@@ -706,7 +706,8 @@ _DASHBOARD_HTML = r"""<!DOCTYPE html>
     <div class="field">
       <label>Local model</label>
       <select id="local-model-select">
-        <option value="phi4-mini">phi4-mini (default — fast &amp; capable, ~2.5 GB)</option>
+        <option value="nemotron-3-nano:4b">nemotron-3-nano:4b (default — fast &amp; capable, ~2.5 GB)</option>
+        <option value="phi4-mini">phi4-mini — fast &amp; capable, ~2.5 GB</option>
         <option value="gpt-oss:20b">gpt-oss:20b — best reasoning quality (~12 GB)</option>
         <option value="qwen3.5:9b">qwen3.5:9b — capable mid-size model (~5 GB)</option>
         <option value="qwen3.5:4b">qwen3.5:4b — balanced speed &amp; quality (~2.5 GB)</option>
@@ -1178,7 +1179,7 @@ async function loadLocalModel(){
     const r=await fetch('/api/local-model');
     const d=await r.json();
     const sel=document.getElementById('local-model-select');
-    if(sel)sel.value=d.current_model||'phi4-mini';
+    if(sel)sel.value=d.current_model||'nemotron-3-nano:4b';
     const dot=document.getElementById('ollama-dot');
     const txt=document.getElementById('ollama-status-text');
     if(d.ollama_reachable){

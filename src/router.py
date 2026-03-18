@@ -647,7 +647,7 @@ async def _ask_ollama_router(
                 },
             }
             # gpt-oss variants use string thinking levels ("low"/"medium"/"high").
-            # All other models (phi4-mini, qwen3.5, etc.) reject this field with 400.
+            # All other models (nemotron-3-nano:4b, phi4-mini, qwen3.5, etc.) reject this field with 400.
             if "gpt-oss" in router_model:
                 json_body["think"] = "low"
 

@@ -321,13 +321,13 @@ providers:
 # Ollama runs on the HOST machine (not inside Docker) so it can use GPU.
 # If Ollama is not installed or not running, FreeClawRouter gracefully skips
 # local routing and returns a clear error instead of crashing.
-# Install: https://ollama.com  — then run: ollama pull phi4-mini
+# Install: https://ollama.com  — then run: ollama pull nemotron-3-nano:4b
 # ---------------------------------------------------------------------------
 local:
   ollama:
     base_url: "http://host.docker.internal:11434"
-    router_model: "phi4-mini"      # model used for routing decisions (must be fast)
-    fallback_model: "phi4-mini"    # model used for actual inference fallback
+    router_model: "nemotron-3-nano:4b"      # model used for routing decisions (must be fast)
+    fallback_model: "nemotron-3-nano:4b"    # model used for actual inference fallback
     fallback_enabled: true          # set to false or use "none" via dashboard to disable
 
 # ---------------------------------------------------------------------------

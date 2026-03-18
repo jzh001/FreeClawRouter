@@ -21,7 +21,7 @@ it simply has its `baseUrl` pointed at `http://localhost:8765/v1`.
 │                              ▼                       ▼           │
 │                    ┌──────────────────┐   ┌──────────────────┐  │
 │                    │  Cloud Free APIs │   │  Ollama (local)  │  │
-│                    │  Cerebras/Groq/  │   │  phi4-mini       │  │
+│                    │  Cerebras/Groq/  │   │  nemotron-3-nano:4b│  │
 │                    │  Gemini/etc.     │   │  (router+fallback)│  │
 │                    └──────────────────┘   └──────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
@@ -155,14 +155,14 @@ message content, no authentication data. This satisfies PRD §4.1.
 
 ### Ollama Router Think Mode
 
-`phi4-mini` is the default local router/fallback model. Some reasoning models
+`nemotron-3-nano:4b` is the default local router/fallback model (`phi4-mini` also supported). Some reasoning models
 (e.g. `gpt-oss:20b`) use string-based thinking levels (`"low"`, `"medium"`,
 `"high"`) rather than boolean `true`/`false`. When such a model is selected
 (detected via `"gpt-oss" in router_model`), the router call includes
 `"think": "low"` to minimise the reasoning trace so the visible response (the
 option number) is generated within the `num_predict` token budget. All other
 models omit this field entirely to avoid HTTP 400 errors from models that reject
-unknown parameters (e.g. `phi4-mini`).
+unknown parameters (e.g. `nemotron-3-nano:4b`, `phi4-mini`).
 
 ---
 
