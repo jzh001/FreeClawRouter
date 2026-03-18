@@ -6,9 +6,9 @@ Welcome! This guide walks you through setting up FreeClawRouter from scratch. No
 
 ## 1. What is FreeClawRouter?
 
-FreeClawRouter is a small program that runs on your computer and acts as a smart middleman between your AI assistant (OpenClaw) and the internet. It automatically routes your requests to the best free AI service available — and falls back to a local AI model on your machine if the free services are busy.
+FreeClawRouter is a small program that runs on your computer and acts as a smart middleman between your AI assistant (OpenClaw) and the internet. It automatically routes your requests across your configured AI providers — balancing rate limits, latency, and task complexity — and falls back to a local AI model on your machine when all cloud providers are unavailable.
 
-The result: a fully functional AI assistant that costs nothing to run.
+Each provider has its own pricing and terms of service. FreeClawRouter simply manages routing across the providers you have configured with your own API keys.
 
 ---
 
@@ -78,9 +78,9 @@ cd freeclawrouter
 
 ---
 
-## 6. Get your free API keys
+## 6. Get your API keys
 
-FreeClawRouter works with several free AI services. You need at least one key to get started — the more you add, the higher your combined daily request limit.
+FreeClawRouter works with several AI services. You need at least one key to get started — the more providers you configure, the more capacity FreeClawRouter can balance across. Check each provider's current plans and terms of service before signing up.
 
 In the FreeClawRouter folder, copy the example environment file:
 
@@ -97,25 +97,25 @@ Open the `.env` file with any text editor (Notepad, TextEdit, VS Code, etc.) and
 
 ---
 
-### Cerebras — 14,400 free requests per day
+### Cerebras
 
-1. Go to [https://cloud.cerebras.ai](https://cloud.cerebras.ai) and click **Sign Up** (no credit card required)
+1. Go to [https://cloud.cerebras.ai](https://cloud.cerebras.ai) and click **Sign Up**
 2. After signing in, click your profile icon (top right) → **API Keys**
 3. Click **Create new key**, give it a name like "FreeClaw", and copy the key
 4. In your `.env` file, paste it next to `CEREBRAS_API_KEY=`
 
 ---
 
-### Groq — 14,400 free requests per day
+### Groq
 
-1. Go to [https://console.groq.com](https://console.groq.com) and click **Sign Up** (no credit card required)
+1. Go to [https://console.groq.com](https://console.groq.com) and click **Sign Up**
 2. After signing in, go to **API Keys** in the left sidebar
 3. Click **Create API Key**, copy the key
 4. In your `.env` file, paste it next to `GROQ_API_KEY=`
 
 ---
 
-### Google AI Studio (Gemini) — 250 free requests per day
+### Google AI Studio (Gemini)
 
 1. Go to [https://aistudio.google.com](https://aistudio.google.com) and sign in with your Google account
 2. Click **Get API key** (top left) → **Create API key**
@@ -124,9 +124,9 @@ Open the `.env` file with any text editor (Notepad, TextEdit, VS Code, etc.) and
 
 ---
 
-### OpenRouter — 200 free requests per day
+### OpenRouter
 
-1. Go to [https://openrouter.ai](https://openrouter.ai) and click **Sign In** (free account)
+1. Go to [https://openrouter.ai](https://openrouter.ai) and click **Sign In**
 2. After signing in, go to **Keys** in the top menu
 3. Click **Create Key**, give it a name, and copy it
 4. In your `.env` file, paste it next to `OPENROUTER_API_KEY=`
@@ -135,7 +135,7 @@ Open the `.env` file with any text editor (Notepad, TextEdit, VS Code, etc.) and
 
 ### Other providers (optional)
 
-The `.env` file also has slots for **NVIDIA NIM** (`NVIDIA_API_KEY`), **SambaNova** (`SAMBANOVA_API_KEY`), and **Mistral** (`MISTRAL_API_KEY`). These are optional — leave them blank if you do not want to use them. FreeClawRouter automatically skips providers without a key.
+The `.env` file also has slots for **NVIDIA NIM** (`NVIDIA_API_KEY`), **SambaNova** (`SAMBANOVA_API_KEY`), and **Mistral** (`MISTRAL_API_KEY`). These are optional — leave them blank if you do not want to use them. FreeClawRouter automatically skips providers without a key. Check each provider's current plans and terms before signing up.
 
 ---
 

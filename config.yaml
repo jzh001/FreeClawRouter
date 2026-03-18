@@ -23,20 +23,20 @@
 #
 # Priority order rationale:
 #   1. Cerebras   — highest RPM+RPD, wafer-scale silicon, proven reliability
-#   2. NVIDIA NIM — highest RPM (40), NO daily cap (credit-based); scoring gets
-#                   +20 for no daily limit — promotes heavy use of free credits
+#   2. NVIDIA NIM — highest RPM (40), credit-based (no daily cap); scoring gets
+#                   +20 for no daily limit — preserves capacity of RPD-capped providers
 #   3. Groq       — excellent RPM but lower RPD (1K) on most models
 #   4. Google AI  — moderate limits (10 RPM, 250 RPD); huge 1M context window
-#   5. OpenRouter — aggregates free models; lowest RPD (200)
-#   6. SambaNova  — very limited free tier (20 RPD); save for hard reasoning
+#   5. OpenRouter — aggregates many models; lowest RPD (200)
+#   6. SambaNova  — low RPD (20); reserve for tasks that need it
 #   7. Mistral    — most restrictive (2 RPM); last resort
 
 providers:
 
   # --------------------------------------------------------------------------
   # Cerebras — wafer-scale silicon; fastest inference speeds available
-  # Sign up: https://cloud.cerebras.ai  (no credit card required)
-  # Free limits: 30 RPM, 14,400 RPD, 60K TPM, 1M TPD
+  # Sign up: https://cloud.cerebras.ai
+  # Rate limits: 30 RPM, 14,400 RPD, 60K TPM, 1M TPD
   #   Note: qwen3-235b preview has 30K TPM limit (lower than llama3.1-8b).
   # --------------------------------------------------------------------------
   cerebras:
@@ -67,9 +67,9 @@ providers:
         priority: 2
 
   # --------------------------------------------------------------------------
-  # NVIDIA Build (NIM) — credit-based free tier (1,000 credits at signup)
+  # NVIDIA Build (NIM) — credit-based inference platform
   # Sign up: https://build.nvidia.com  (requires phone verification)
-  # Free limits: ~40 RPM; credits depleted over time (not a hard RPD cap).
+  # Rate limits: ~40 RPM; credit-based (no hard daily cap).
   # Priority 2: highest RPM of all providers; no daily cap → scoring +20 bonus.
   # --------------------------------------------------------------------------
   nvidia_nim:
@@ -130,8 +130,8 @@ providers:
 
   # --------------------------------------------------------------------------
   # Groq — LPU inference; ultra-low latency
-  # Sign up: https://console.groq.com  (no credit card required)
-  # Free limits: 30 RPM, 1,000 RPD (most models); llama-3.1-8b-instant 14,400 RPD
+  # Sign up: https://console.groq.com
+  # Rate limits: 30 RPM, 1,000 RPD (most models); llama-3.1-8b-instant 14,400 RPD
   # Note: Kimi K2 and Llama 4 Scout are preview — may have tighter limits.
   # --------------------------------------------------------------------------
   groq:
@@ -178,10 +178,9 @@ providers:
 
   # --------------------------------------------------------------------------
   # Google AI Studio (Gemini API)
-  # Sign up: https://aistudio.google.com  (free, no credit card)
-  # Free limits vary per model; check https://aistudio.google.com/rate-limit
-  # Note: gemini-3.1-pro-preview has NO free API tier (paid only at $2/M tokens).
-  #       Use the web UI at aistudio.google.com for free interactive access.
+  # Sign up: https://aistudio.google.com
+  # Rate limits vary per model; check https://aistudio.google.com/rate-limit
+  # Note: some models are paid-only — verify your tier's available models.
   # --------------------------------------------------------------------------
   google_ai:
     enabled: true
@@ -218,9 +217,9 @@ providers:
         priority: 3
 
   # --------------------------------------------------------------------------
-  # OpenRouter — aggregates 29+ free models
-  # Sign up: https://openrouter.ai  (200 RPD with payment method on file)
-  # Free limits: ~20 RPM, 50–200 RPD per model
+  # OpenRouter — aggregates models from many providers
+  # Sign up: https://openrouter.ai
+  # Rate limits: ~20 RPM, 50–200 RPD per model (tier-dependent)
   # --------------------------------------------------------------------------
   openrouter:
     enabled: true
@@ -248,9 +247,9 @@ providers:
         priority: 2
 
   # --------------------------------------------------------------------------
-  # SambaNova Cloud — fast inference; restrictive free tier
-  # Sign up: https://cloud.sambanova.ai  (no credit card required)
-  # Free limits: 20 RPM, 20 RPD, 200K TPD  (very limited without card)
+  # SambaNova Cloud — fast inference
+  # Sign up: https://cloud.sambanova.ai
+  # Rate limits: 20 RPM, 20 RPD, 200K TPD
   # --------------------------------------------------------------------------
   sambanova:
     enabled: true
@@ -279,10 +278,10 @@ providers:
         priority: 2
 
   # --------------------------------------------------------------------------
-  # Mistral AI — free Experiment plan
-  # Sign up: https://console.mistral.ai  → select Experiment tier
-  # Free limits: ~2 RPM, ~1B tokens/month (very limited — prototyping only)
-  # Note: Devstral 2 and Codestral moved to paid. Magistral Small/Medium paid.
+  # Mistral AI
+  # Sign up: https://console.mistral.ai
+  # Rate limits: ~2 RPM, ~1B tokens/month (Experiment tier — verify current plan)
+  # Note: some models (Devstral 2, Codestral, Magistral) require a paid tier.
   # --------------------------------------------------------------------------
   mistral:
     enabled: true

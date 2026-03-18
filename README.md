@@ -1,10 +1,12 @@
 # FreeClawRouter
 
-**FreeClawRouter** is a zero-cost, self-hosted reverse proxy that lets you run **OpenClaw** (or any OpenAI-compatible agent) entirely on free-tier LLM APIs — with automatic failover to a local Ollama model when all cloud quotas are exhausted.
+**FreeClawRouter** is a self-hosted OpenAI-compatible reverse proxy that intelligently distributes requests across multiple LLM providers — balancing rate limits, latency, and task complexity. When all configured cloud providers are unavailable, it falls back to a local Ollama model.
+
+> Each provider has its own usage limits and pricing. FreeClawRouter works with whichever providers you have configured — see each provider's terms of service for details on permitted use.
 
 ```
 OpenClaw → FreeClawRouter (port 8765) → [ Cerebras / Groq / Gemini / OpenRouter / NVIDIA / SambaNova / Mistral ]
-                                                   ↓ (all limits hit)
+                                                   ↓ (all providers unavailable)
                                              Local Ollama (phi4-mini)
 ```
 
@@ -14,10 +16,10 @@ OpenClaw → FreeClawRouter (port 8765) → [ Cerebras / Groq / Gemini / OpenRou
 
 - **Smart routing** — hybrid two-tier engine combines deterministic scheduling scores with local LLM confirmation to pick the best provider for each request
 - **Error rerouting** — on a retryable failure (429, 5xx, connection error) the failed provider is automatically skipped and the next best option is tried, transparently, before any bytes reach the client
-- **Local-first threshold** — configurable `local_only_threshold` option routes simple or all tasks directly to your local Ollama model without consuming cloud credits; adjustable without a restart via the dashboard Settings tab
+- **Local-first threshold** — configurable `local_only_threshold` option routes simple or all tasks directly to your local Ollama model; adjustable without a restart via the dashboard Settings tab
 - **Provider health tracking** — each provider's status (active / rate limited / error / idle) is derived from request outcomes in real time — zero extra API calls — and shown as colour-coded dots on the dashboard
 - **Background conversation summarization** — long conversations are automatically summarized by the local Ollama model in the background (off the critical path) so old turns are compressed rather than silently dropped when the context window fills
-- **Zero-cost operation** — combines free-tier quotas from Cerebras, Groq, Gemini, OpenRouter, NVIDIA, SambaNova, and Mistral, with local Ollama as the final fallback
+- **Multi-provider orchestration** — routes across Cerebras, Groq, Gemini, OpenRouter, NVIDIA NIM, SambaNova, and Mistral, with local Ollama as the final fallback; each provider's rate limits are tracked independently
 
 ---
 
@@ -54,27 +56,28 @@ git clone https://github.com/your-username/freeclawrouter.git
 cd freeclawrouter
 ```
 
-### 3. Create your `.env` file with free-tier API keys with free-tier API keys
+### 3. Create your `.env` file with API keys
 
 ```bash
 cp .env.example .env
 ```
 
 Edit `.env` and fill in the keys for the providers you want to use.
-You only need **one** — the more you add, the higher your combined free quota.
+You only need **one** — the more you add, the more capacity FreeClawRouter can balance across.
 
 ```ini
 # .env
-CEREBRAS_API_KEY=        # https://cloud.cerebras.ai  — 14,400 req/day free
-GROQ_API_KEY=            # https://console.groq.com   — 14,400 req/day free
-GOOGLE_AI_API_KEY=       # https://aistudio.google.com — 250 req/day free
-OPENROUTER_API_KEY=      # https://openrouter.ai       — 200 req/day free
-NVIDIA_API_KEY=          # https://build.nvidia.com    — 40 req/min free
-SAMBANOVA_API_KEY=       # https://cloud.sambanova.ai  — 200K tokens/day free
-MISTRAL_API_KEY=         # https://console.mistral.ai  — ~500K TPM free
+CEREBRAS_API_KEY=        # https://cloud.cerebras.ai
+GROQ_API_KEY=            # https://console.groq.com
+GOOGLE_AI_API_KEY=       # https://aistudio.google.com
+OPENROUTER_API_KEY=      # https://openrouter.ai
+NVIDIA_API_KEY=          # https://build.nvidia.com
+SAMBANOVA_API_KEY=       # https://cloud.sambanova.ai
+MISTRAL_API_KEY=         # https://console.mistral.ai
 ```
 
 Leave unused keys blank — FreeClawRouter automatically skips providers without a key.
+Each provider's usage is subject to their own terms of service and rate limits.
 
 ### 4. (Optional) Configure OpenClaw
 
@@ -350,17 +353,19 @@ http://<host-ip>:8765/dashboard
 
 ---
 
-## Supported Free-Tier Providers
+## Supported Providers
 
-| Provider | Free RPD | Context | Sign-Up |
+| Provider | Rate Limits | Max Context | Sign-Up |
 |---|---|---|---|
-| Cerebras | 14,400 | 128K | [cloud.cerebras.ai](https://cloud.cerebras.ai) |
-| Groq | 14,400 | 128K | [console.groq.com](https://console.groq.com) |
-| Google AI Studio | 250 | 1M | [aistudio.google.com](https://aistudio.google.com) |
-| OpenRouter | 200 | Varies | [openrouter.ai](https://openrouter.ai) |
-| NVIDIA NIM | ~unlimited | 128K | [build.nvidia.com](https://build.nvidia.com) |
-| SambaNova | 200K TPD | 8K–164K | [cloud.sambanova.ai](https://cloud.sambanova.ai) |
-| Mistral (Experiment) | ~unlimited | 128K | [console.mistral.ai](https://console.mistral.ai) |
+| Cerebras | 30 RPM / 14,400 RPD | 128K | [cloud.cerebras.ai](https://cloud.cerebras.ai) |
+| Groq | 30 RPM / 1,000–14,400 RPD | 128K | [console.groq.com](https://console.groq.com) |
+| Google AI Studio | 10 RPM / 250 RPD | 1M | [aistudio.google.com](https://aistudio.google.com) |
+| OpenRouter | 20 RPM / 200 RPD | Varies | [openrouter.ai](https://openrouter.ai) |
+| NVIDIA NIM | 40 RPM / credit-based | 262K | [build.nvidia.com](https://build.nvidia.com) |
+| SambaNova | 20 RPM / 20 RPD | 164K | [cloud.sambanova.ai](https://cloud.sambanova.ai) |
+| Mistral | 2 RPM | 256K | [console.mistral.ai](https://console.mistral.ai) |
+
+> Limits shown are approximate and tier-dependent. Check each provider's current pricing and terms before use.
 
 ---
 
